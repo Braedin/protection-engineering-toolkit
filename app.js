@@ -1,14 +1,46 @@
 
-// ===================== Protection Engineering Toolkit =====================
-const TOOLS = [
-  {id:'tcc', label:'TCC Plotter'},
-  {id:'symcomp', label:'Symmetrical Components'},
-  {id:'ctsat', label:'CT Knee-Point / Saturation'},
-  {id:'diff87', label:'Transformer Differential (87T)'},
-  {id:'fault', label:'Fault Level Calculator'},
-  {id:'txfmr', label:'Transformer FLC & Fault Current'},
-  {id:'arcflash', label:'Arc Flash Reference'},
+// ===================== Protection Engineering Toolkit v0.4.0 =====================
+const TOOL_GROUPS = [
+  {
+    label: 'Overcurrent',
+    tools: [
+      {id:'tcc', label:'TCC Plotter'},
+    ]
+  },
+  {
+    label: 'System Analysis',
+    tools: [
+      {id:'symcomp', label:'Symmetrical Components'},
+      {id:'fault', label:'Fault Level Calculator'},
+    ]
+  },
+  {
+    label: 'Transformers',
+    tools: [
+      {id:'diff87', label:'Differential (87T)'},
+      {id:'txfmr', label:'FLC & Fault Current'},
+    ]
+  },
+  {
+    label: 'CT / Instrument Transformers',
+    tools: [
+      {id:'ctsat', label:'CT Knee-Point / Saturation'},
+    ]
+  },
+  {
+    label: 'Reference',
+    tools: [
+      {id:'arcflash', label:'Arc Flash Reference'},
+      {id:'references', label:'Standards Library'},
+    ]
+  },
 ];
+const TOOLS = TOOL_GROUPS.flatMap(g => g.tools);
+
+function safeNum(val, fallback=0){
+  const n = parseFloat(val);
+  return isNaN(n) ? fallback : n;
+}
 
 const CURVES = {
   'IEC-SI':   {name:'IEC Standard Inverse (SI)',   A:0.14,  p:0.02, B:0, family:'IEC'},
@@ -46,11 +78,11 @@ function renderTCC(container){
         <div id="curveEditor"></div>
         <button class="btn btn-secondary" id="addCurveBtn" style="margin-top:8px;width:100%;">+ Add curve</button>
         <div class="field" style="margin-top:16px;">
-          <label>Evaluate at fault current multiple (x Is)</label>
-          <input type="number" id="evalMultiple" value="10" step="0.1" min="1.01">
+          <label>Fault current to evaluate (A, in selected axis reference)</label>
+          <input type="number" id="evalCurrent" value="1000" step="1" min="0">
         </div>
         <div class="results" id="evalResults"></div>
-        <div class="note">Formula: t = TMS &times; [A / ((I/Is)<sup>p</sup> &minus; 1) + B]. IEC curves use B=0. IEEE curves (C37.112) use the additive B term. Primary current = secondary current &times; CT ratio (e.g. 400/1 = ratio 400).</div>
+        <div class="note">Formula: t = TMS &times; [A / ((I/Is)<sup>p</sup> &minus; 1) + B]. IEC curves use B=0. IEEE curves (C37.112) use the additive B term. The dashed vertical line marks your evaluated fault current and its intersection with every curve.</div>
       </div>
       <div class="chart-wrap">
         <canvas id="tccCanvas"></canvas>
@@ -62,7 +94,7 @@ function renderTCC(container){
     renderCurveEditor();
     updateTCCChart();
   };
-  document.getElementById('evalMultiple').oninput = updateTCCChart;
+  document.getElementById('evalCurrent').oninput = updateTCCChart;
   document.getElementById('tccAxisMode').onchange = updateTCCChart;
   renderCurveEditor();
   updateTCCChart();
@@ -102,7 +134,7 @@ function renderCurveEditor(){
       const id = e.target.dataset.id;
       const field = e.target.dataset.field;
       const curve = activeCurves.find(c=>c.id===id);
-      curve[field] = field==='key' ? e.target.value : parseFloat(e.target.value);
+      curve[field] = field==='key' ? e.target.value : safeNum(e.target.value, field==='ctRatio'?1:0);
       updateTCCChart();
     };
   });
@@ -118,11 +150,13 @@ function updateTCCChart(){
   const ctx = document.getElementById('tccCanvas');
   if (!ctx) return;
   const axisMode = document.getElementById('tccAxisMode').value;
+  const evalCurrent = safeNum(document.getElementById('evalCurrent').value, 0);
   const colors = ['#4fb0ff','#ffb74f','#4fd88a','#ff6b6b','#c792ea','#ff8fab'];
+
   const datasets = activeCurves.map((c, idx) => {
     const points = [];
     const refMultiplier = axisMode==='primary' ? c.ctRatio : 1;
-    for (let m = 1.05; m <= 20; m *= 1.03){
+    for (let m = 1.05; m <= 30; m *= 1.03){
       const t = curveTime(c.key, m, c.tms);
       if (t !== null && t < 1000) points.push({x: c.pickup*m*refMultiplier, y: t});
     }
@@ -138,6 +172,48 @@ function updateTCCChart(){
     };
   });
 
+  let minY = 0.01, maxY = 100;
+  if (evalCurrent > 0){
+    const allTimes = activeCurves.map(c => {
+      const refMultiplier = axisMode==='primary' ? c.ctRatio : 1;
+      const effectivePickup = c.pickup * refMultiplier;
+      const ratio = evalCurrent / effectivePickup;
+      return curveTime(c.key, ratio, c.tms);
+    }).filter(t => t !== null);
+    if (allTimes.length){
+      minY = Math.min(...allTimes) * 0.3;
+      maxY = Math.max(...allTimes) * 3;
+    }
+    datasets.push({
+      label: `Evaluated fault current (${evalCurrent} A)`,
+      data: [{x:evalCurrent, y:minY}, {x:evalCurrent, y:maxY}],
+      borderColor: '#ffffff',
+      borderDash: [6,4],
+      borderWidth: 1.5,
+      pointRadius: 0,
+      parsing: false,
+      fill: false,
+    });
+    activeCurves.forEach((c, idx) => {
+      const refMultiplier = axisMode==='primary' ? c.ctRatio : 1;
+      const effectivePickup = c.pickup * refMultiplier;
+      const ratio = evalCurrent / effectivePickup;
+      const t = curveTime(c.key, ratio, c.tms);
+      if (t !== null){
+        datasets.push({
+          label: `Intersection: ${CURVES[c.key].name}`,
+          data: [{x:evalCurrent, y:t}],
+          borderColor: colors[idx % colors.length],
+          backgroundColor: colors[idx % colors.length],
+          pointRadius: 6,
+          showLine: false,
+          type: 'scatter',
+          parsing: false,
+        });
+      }
+    });
+  }
+
   if (tccChart) tccChart.destroy();
   tccChart = new Chart(ctx, {
     type:'line',
@@ -150,24 +226,27 @@ function updateTCCChart(){
         y:{type:'logarithmic', title:{display:true,text:'Operating Time (s)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}},
       },
       plugins:{
-        legend:{labels:{color:'#e7ecf7', font:{size:11}}},
+        legend:{labels:{color:'#e7ecf7', font:{size:10}}},
         tooltip:{mode:'nearest'}
       }
     }
   });
 
-  const mult = parseFloat(document.getElementById('evalMultiple').value) || 10;
   const evalEl = document.getElementById('evalResults');
-  evalEl.innerHTML = activeCurves.map(c => {
-    const t = curveTime(c.key, mult, c.tms);
-    const refMultiplier = axisMode==='primary' ? c.ctRatio : 1;
-    const displayCurrent = (c.pickup*mult*refMultiplier).toFixed(1);
-    const unit = axisMode==='primary' ? 'A primary' : 'A secondary';
-    return `<div class="result-line"><span>${CURVES[c.key].name} @ ${mult}xIs (${displayCurrent}${unit})</span><b>${t!==null ? t.toFixed(3)+' s' : 'undefined'}</b></div>`;
-  }).join('');
+  if (evalCurrent > 0){
+    evalEl.innerHTML = activeCurves.map(c => {
+      const refMultiplier = axisMode==='primary' ? c.ctRatio : 1;
+      const effectivePickup = c.pickup * refMultiplier;
+      const ratio = evalCurrent / effectivePickup;
+      const t = curveTime(c.key, ratio, c.tms);
+      return `<div class="result-line"><span>${CURVES[c.key].name} @ ${evalCurrent}A</span><b>${t!==null ? t.toFixed(3)+' s' : 'below pickup'}</b></div>`;
+    }).join('');
+  } else {
+    evalEl.innerHTML = '';
+  }
 }
 
-// ===================== Symmetrical Components (with phasor diagram) =====================
+// ===================== Symmetrical Components (before/after phasor diagrams) =====================
 function complexMul(a, b){ return {re: a.re*b.re - a.im*b.im, im: a.re*b.im + a.im*b.re}; }
 function complexAdd(a, b){ return {re: a.re+b.re, im: a.im+b.im}; }
 function polarToRect(mag, angDeg){ const r = angDeg*Math.PI/180; return {re: mag*Math.cos(r), im: mag*Math.sin(r)}; }
@@ -178,7 +257,7 @@ const a2_op = polarToRect(1,240);
 function renderSymComp(container){
   container.innerHTML = `
     <h2>Symmetrical Components Calculator <span class="std-badge">Fortescue / IEC 60909</span></h2>
-    <p class="tool-desc">Convert unbalanced three-phase phasors (Ia, Ib, Ic or Va, Vb, Vc) to positive, negative and zero sequence components, or vice versa. Useful for fault phasor analysis and unbalance studies.</p>
+    <p class="tool-desc">Convert unbalanced three-phase phasors (Ia, Ib, Ic or Va, Vb, Vc) to positive, negative and zero sequence components, or vice versa. The "Before" diagram shows your input quantities; "After" shows the calculated result.</p>
     <div class="grid">
       <div class="card">
         <div class="field">
@@ -189,17 +268,18 @@ function renderSymComp(container){
           </select>
         </div>
         <div id="symInputs"></div>
-        <button class="btn" id="symCalcBtn" style="width:100%;margin-top:8px;">Calculate</button>
+        <div class="results" id="symResults"></div>
       </div>
-      <div class="chart-wrap">
-        <canvas id="symPhasorCanvas" width="500" height="500" style="max-width:100%;"></canvas>
-        <div id="symResults" class="results"></div>
+      <div class="card">
+        <h3 style="margin-top:0;font-size:0.95rem;color:var(--text-dim);">Before (input)</h3>
+        <canvas id="symBeforeCanvas" width="380" height="380" style="max-width:100%;"></canvas>
+        <h3 style="font-size:0.95rem;color:var(--text-dim);margin-top:16px;">After (result)</h3>
+        <canvas id="symAfterCanvas" width="380" height="380" style="max-width:100%;"></canvas>
       </div>
     </div>
   `;
   document.getElementById('symDir').onchange = renderSymInputs;
   renderSymInputs();
-  document.getElementById('symCalcBtn').onclick = calcSymComp;
 }
 
 function renderSymInputs(){
@@ -218,11 +298,14 @@ function renderSymInputs(){
       <div class="field"><label>Negative seq: magnitude / angle (deg)</label><div class="row2"><input id="s3m" type="number" value="0"><input id="s3a" type="number" value="0"></div></div>
     `;
   }
-  drawPhasorDiagram([]);
+  ['s1m','s1a','s2m','s2a','s3m','s3a'].forEach(id => {
+    document.getElementById(id).oninput = calcSymComp;
+  });
+  calcSymComp();
 }
 
-function drawPhasorDiagram(phasors){
-  const canvas = document.getElementById('symPhasorCanvas');
+function drawPhasorDiagram(canvasId, phasors){
+  const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const w = canvas.width, h = canvas.height;
@@ -254,7 +337,7 @@ function drawPhasorDiagram(phasors){
     ctx.lineTo(x,y);
     ctx.stroke();
 
-    const headLen = 10;
+    const headLen = 9;
     const angle = Math.atan2(y-cy, x-cx);
     ctx.beginPath();
     ctx.moveTo(x,y);
@@ -265,16 +348,16 @@ function drawPhasorDiagram(phasors){
     ctx.fill();
 
     ctx.fillStyle = p.color;
-    ctx.font = '13px Segoe UI';
-    ctx.fillText(p.label, x + (x>cx?8:-30), y + (y>cy?16:-8));
+    ctx.font = '12px Segoe UI';
+    ctx.fillText(p.label, x + (x>cx?6:-24), y + (y>cy?14:-6));
   });
 }
 
 function calcSymComp(){
   const dir = document.getElementById('symDir').value;
-  const m1 = parseFloat(document.getElementById('s1m').value), a1 = parseFloat(document.getElementById('s1a').value);
-  const m2 = parseFloat(document.getElementById('s2m').value), a2 = parseFloat(document.getElementById('s2a').value);
-  const m3 = parseFloat(document.getElementById('s3m').value), a3 = parseFloat(document.getElementById('s3a').value);
+  const m1 = safeNum(document.getElementById('s1m').value), a1 = safeNum(document.getElementById('s1a').value);
+  const m2 = safeNum(document.getElementById('s2m').value), a2 = safeNum(document.getElementById('s2a').value);
+  const m3 = safeNum(document.getElementById('s3m').value), a3 = safeNum(document.getElementById('s3a').value);
   const v1 = polarToRect(m1,a1), v2 = polarToRect(m2,a2), v3 = polarToRect(m3,a3);
   const resEl = document.getElementById('symResults');
 
@@ -291,10 +374,13 @@ function calcSymComp(){
       <div class="result-line"><span>Negative sequence (I2 / V2)</span><b>${p2.mag.toFixed(3)} ∠ ${p2.ang.toFixed(2)}°</b></div>
       <div class="note">Unbalance factor (I2/I1): ${(p1.mag>0 ? (p2.mag/p1.mag*100).toFixed(2) : '0.00')}%</div>
     `;
-    drawPhasorDiagram([
+    drawPhasorDiagram('symBeforeCanvas', [
       {mag:m1, ang:a1, color:'#4fb0ff', label:'A'},
       {mag:m2, ang:a2, color:'#ffb74f', label:'B'},
       {mag:m3, ang:a3, color:'#4fd88a', label:'C'},
+    ]);
+    drawPhasorDiagram('symAfterCanvas', [
+      {mag:p0.mag, ang:p0.ang, color:'#9fb0cf', label:'I0'},
       {mag:p1.mag, ang:p1.ang, color:'#ff6b6b', label:'I1'},
       {mag:p2.mag, ang:p2.ang, color:'#c792ea', label:'I2'},
     ]);
@@ -308,7 +394,12 @@ function calcSymComp(){
       <div class="result-line"><span>Phase B</span><b>${pb.mag.toFixed(3)} ∠ ${pb.ang.toFixed(2)}°</b></div>
       <div class="result-line"><span>Phase C</span><b>${pc.mag.toFixed(3)} ∠ ${pc.ang.toFixed(2)}°</b></div>
     `;
-    drawPhasorDiagram([
+    drawPhasorDiagram('symBeforeCanvas', [
+      {mag:m1, ang:a1, color:'#9fb0cf', label:'I0'},
+      {mag:m2, ang:a2, color:'#ff6b6b', label:'I1'},
+      {mag:m3, ang:a3, color:'#c792ea', label:'I2'},
+    ]);
+    drawPhasorDiagram('symAfterCanvas', [
       {mag:pa.mag, ang:pa.ang, color:'#4fb0ff', label:'A'},
       {mag:pb.mag, ang:pb.ang, color:'#ffb74f', label:'B'},
       {mag:pc.mag, ang:pc.ang, color:'#4fd88a', label:'C'},
@@ -316,12 +407,12 @@ function calcSymComp(){
   }
 }
 
-// ===================== CT Knee-Point / Saturation (with excitation curve chart) =====================
+// ===================== CT Knee-Point / Saturation =====================
 let ctChart = null;
 function renderCTSat(container){
   container.innerHTML = `
     <h2>CT Knee-Point &amp; Saturation Calculator <span class="std-badge">IEC 61869-2 / AS/NZS 61869</span></h2>
-    <p class="tool-desc">Estimate required CT knee-point voltage for protection-class current transformers and check against a nameplate value. Based on the IEC 61869-2 definition: the point at which a 10% increase in secondary excitation voltage produces a 50% increase in exciting current.</p>
+    <p class="tool-desc">Estimate required CT knee-point voltage for protection-class current transformers and check against a nameplate value.</p>
     <div class="grid">
       <div class="card">
         <div class="field"><label>CT ratio (primary : secondary A)</label>
@@ -330,37 +421,40 @@ function renderCTSat(container){
         <div class="field"><label>Maximum through-fault current, primary (A)</label><input id="ctIf" type="number" value="20000"></div>
         <div class="field"><label>CT secondary winding resistance R_CT (Ω)</label><input id="ctRct" type="number" value="2.5" step="0.01"></div>
         <div class="field"><label>Total lead (loop) resistance R_L (Ω)</label><input id="ctRl" type="number" value="0.8" step="0.01"></div>
-        <div class="field"><label>Relay/relay burden resistance R_relay (Ω)</label><input id="ctRr" type="number" value="0.1" step="0.01"></div>
+        <div class="field"><label>Relay burden resistance R_relay (Ω)</label><input id="ctRr" type="number" value="0.1" step="0.01"></div>
         <div class="field"><label>Dimensioning / safety factor K</label>
           <select id="ctK">
-            <option value="1">1.0 (no margin — min. theoretical Vk)</option>
+            <option value="1">1.0 (no margin)</option>
             <option value="1.5">1.5 (moderate DC offset margin)</option>
-            <option value="2" selected>2.0 (typical differential / REF applications)</option>
+            <option value="2" selected>2.0 (typical differential / REF)</option>
           </select>
         </div>
-        <div class="field"><label>Nameplate knee-point voltage Vk (V) — optional, for check</label><input id="ctVkActual" type="number" placeholder="e.g. 150"></div>
-        <button class="btn" id="ctCalcBtn" style="width:100%;">Calculate</button>
+        <div class="field"><label>Nameplate knee-point voltage Vk (V) — optional</label><input id="ctVkActual" type="number" placeholder="e.g. 150"></div>
       </div>
       <div class="chart-wrap">
         <canvas id="ctCanvas"></canvas>
         <div id="ctResults" class="results"></div>
-        <div class="note">V_k ≥ K × (I_fault,sec) × (R_CT + R_L + R_relay). Chart shows an idealised excitation curve: linear region up to the knee point, then a saturation "knee" beyond which secondary voltage barely rises for large increases in exciting current. This is a simplified conceptual plot, not a manufacturer-tested excitation characteristic.</div>
+        <div class="diagram-note">V_k ≥ K × (I_fault,sec) × (R_CT + R_L + R_relay). Chart shows an idealised excitation curve — not a manufacturer-tested characteristic.</div>
       </div>
     </div>
   `;
-  document.getElementById('ctCalcBtn').onclick = calcCTSat;
+  ['ctPrim','ctSec','ctIf','ctRct','ctRl','ctRr','ctK','ctVkActual'].forEach(id => {
+    document.getElementById(id).addEventListener('input', calcCTSat);
+    document.getElementById(id).addEventListener('change', calcCTSat);
+  });
   calcCTSat();
 }
 
 function calcCTSat(){
-  const prim = parseFloat(document.getElementById('ctPrim').value);
-  const sec = parseFloat(document.getElementById('ctSec').value);
-  const If = parseFloat(document.getElementById('ctIf').value);
-  const Rct = parseFloat(document.getElementById('ctRct').value);
-  const Rl = parseFloat(document.getElementById('ctRl').value);
-  const Rr = parseFloat(document.getElementById('ctRr').value);
-  const K = parseFloat(document.getElementById('ctK').value);
-  const vkActual = parseFloat(document.getElementById('ctVkActual').value);
+  const prim = safeNum(document.getElementById('ctPrim').value, 1);
+  const sec = safeNum(document.getElementById('ctSec').value, 1);
+  const If = safeNum(document.getElementById('ctIf').value);
+  const Rct = safeNum(document.getElementById('ctRct').value);
+  const Rl = safeNum(document.getElementById('ctRl').value);
+  const Rr = safeNum(document.getElementById('ctRr').value);
+  const K = safeNum(document.getElementById('ctK').value, 2);
+  const vkActualRaw = document.getElementById('ctVkActual').value;
+  const vkActual = vkActualRaw === '' ? NaN : safeNum(vkActualRaw);
 
   const ratio = prim/sec;
   const IfSec = If/ratio;
@@ -372,14 +466,14 @@ function calcCTSat(){
     if (vkActual >= Vk_required){
       flagHtml = `<div class="result-flag flag-good">✓ Nameplate Vk (${vkActual} V) meets or exceeds required Vk (${Vk_required.toFixed(1)} V)</div>`;
     } else {
-      flagHtml = `<div class="result-flag flag-warn">⚠ Nameplate Vk (${vkActual} V) is below required Vk (${Vk_required.toFixed(1)} V) — CT may saturate under this fault condition</div>`;
+      flagHtml = `<div class="result-flag flag-warn">⚠ Nameplate Vk (${vkActual} V) is below required Vk (${Vk_required.toFixed(1)} V)</div>`;
     }
   }
 
   resEl.innerHTML = `
     <div class="result-line"><span>CT ratio</span><b>${ratio.toFixed(1)} : 1</b></div>
     <div class="result-line"><span>Fault current referred to secondary</span><b>${IfSec.toFixed(2)} A</b></div>
-    <div class="result-line"><span>Total secondary burden (R_CT+R_L+R_relay)</span><b>${(Rct+Rl+Rr).toFixed(2)} Ω</b></div>
+    <div class="result-line"><span>Total secondary burden</span><b>${(Rct+Rl+Rr).toFixed(2)} Ω</b></div>
     <div class="result-line"><span>Required knee-point voltage V_k</span><b>${Vk_required.toFixed(1)} V</b></div>
     ${flagHtml}
   `;
@@ -421,12 +515,12 @@ function calcCTSat(){
   });
 }
 
-// ===================== Transformer Differential 87T (fixed linear chart) =====================
+// ===================== Transformer Differential 87T =====================
 let diffChart = null;
 function renderDiff87(container){
   container.innerHTML = `
     <h2>Transformer Differential (87T) Plotter <span class="std-badge">Dual-Slope Percentage Restraint</span></h2>
-    <p class="tool-desc">Visualise a dual-slope percentage-restraint differential characteristic for transformer protection. Adjust pickup and slope breakpoints to evaluate stability against CT mismatch, tap changer range and through-fault current.</p>
+    <p class="tool-desc">Visualise a dual-slope percentage-restraint differential characteristic. Enter a measured operating point to check if it falls in the trip or restraint region.</p>
     <div class="grid">
       <div class="card">
         <div class="field"><label>Minimum pickup (Id_min, pu)</label><input id="dPickup" type="number" value="0.3" step="0.01"></div>
@@ -435,9 +529,8 @@ function renderDiff87(container){
         <div class="field"><label>Slope 2 (%)</label><input id="dSlope2" type="number" value="60" step="1"></div>
         <div class="field"><label>Max restraint shown (Ir, pu)</label><input id="dMaxIr" type="number" value="10" step="0.5"></div>
         <hr style="border-color:var(--border);margin:14px 0;">
-        <div class="field"><label>Test point — restraint current Ir (pu)</label><input id="dTestIr" type="number" value="4" step="0.1"></div>
-        <div class="field"><label>Test point — differential current Id (pu)</label><input id="dTestId" type="number" value="1.5" step="0.1"></div>
-        <button class="btn" id="dCalcBtn" style="width:100%;">Plot &amp; check point</button>
+        <div class="field"><label>Measured restraint current Ir (pu)</label><input id="dTestIr" type="number" value="4" step="0.1"></div>
+        <div class="field"><label>Measured differential current Id (pu)</label><input id="dTestId" type="number" value="1.5" step="0.1"></div>
         <div class="results" id="dResults"></div>
       </div>
       <div class="chart-wrap"><canvas id="diffCanvas"></canvas></div>
@@ -446,7 +539,6 @@ function renderDiff87(container){
   ['dPickup','dSlope1','dBp1','dSlope2','dMaxIr','dTestIr','dTestId'].forEach(id => {
     document.getElementById(id).oninput = updateDiffChart;
   });
-  document.getElementById('dCalcBtn').onclick = updateDiffChart;
   updateDiffChart();
 }
 
@@ -457,13 +549,13 @@ function diffCharacteristic(ir, pickup, s1, bp1, s2){
 }
 
 function updateDiffChart(){
-  const pickup = parseFloat(document.getElementById('dPickup').value);
-  const s1 = parseFloat(document.getElementById('dSlope1').value);
-  const bp1 = parseFloat(document.getElementById('dBp1').value);
-  const s2 = parseFloat(document.getElementById('dSlope2').value);
-  const maxIr = parseFloat(document.getElementById('dMaxIr').value);
-  const testIr = parseFloat(document.getElementById('dTestIr').value);
-  const testId = parseFloat(document.getElementById('dTestId').value);
+  const pickup = safeNum(document.getElementById('dPickup').value, 0.3);
+  const s1 = safeNum(document.getElementById('dSlope1').value, 25);
+  const bp1 = safeNum(document.getElementById('dBp1').value, 2.5);
+  const s2 = safeNum(document.getElementById('dSlope2').value, 60);
+  const maxIr = safeNum(document.getElementById('dMaxIr').value, 10);
+  const testIr = safeNum(document.getElementById('dTestIr').value);
+  const testId = safeNum(document.getElementById('dTestId').value);
 
   const points = [];
   const steps = 200;
@@ -481,7 +573,7 @@ function updateDiffChart(){
     data:{
       datasets:[
         {label:'Operate boundary', data:points, borderColor:'#4fb0ff', backgroundColor:'rgba(79,176,255,0.08)', fill:true, pointRadius:0, borderWidth:2, parsing:false},
-        {label:'Test point', data:[{x:testIr,y:testId}], borderColor: willOperate?'#ff6b6b':'#4fd88a', backgroundColor: willOperate?'#ff6b6b':'#4fd88a', pointRadius:7, showLine:false, type:'scatter', parsing:false}
+        {label:'Measured operating point', data:[{x:testIr,y:testId}], borderColor: willOperate?'#ff6b6b':'#4fd88a', backgroundColor: willOperate?'#ff6b6b':'#4fd88a', pointRadius:7, showLine:false, type:'scatter', parsing:false}
       ]
     },
     options:{
@@ -496,46 +588,63 @@ function updateDiffChart(){
   });
 
   document.getElementById('dResults').innerHTML = `
-    <div class="result-line"><span>Operate threshold at Ir=${testIr}</span><b>${thresholdAtTest.toFixed(3)} pu</b></div>
-    <div class="result-flag ${willOperate?'flag-warn':'flag-good'}">${willOperate ? '⚡ Point is ABOVE characteristic — relay would OPERATE' : '✓ Point is below characteristic — relay RESTRAINED'}</div>
+    <div class="result-line"><span>Operate threshold at measured Ir=${testIr}</span><b>${thresholdAtTest.toFixed(3)} pu</b></div>
+    <div class="result-flag ${willOperate?'flag-warn':'flag-good'}">${willOperate ? '⚡ Measured point is ABOVE characteristic — relay would OPERATE' : '✓ Measured point is below characteristic — relay RESTRAINED'}</div>
   `;
 }
 
-// ===================== Fault Level Calculator (with live SLD) =====================
+// ===================== Fault Level Calculator (with fault type selection) =====================
+let currentFaultType = '3ph';
 function renderFault(container){
   container.innerHTML = `
     <h2>Fault Level Calculator <span class="std-badge">IEC 60909 (simplified)</span></h2>
-    <p class="tool-desc">Quick three-phase fault level estimate from system voltage and source/transformer impedance, plus per-unit conversion. For full IEC 60909 studies (c-factor, X/R, motor contribution) use a proper power-system analysis tool such as PowerFactory — this is a fast sanity-check calculator.</p>
+    <p class="tool-desc">Quick fault level estimate from system voltage and source/transformer impedance. Select a fault type to see the approximate current for that condition.</p>
     <div class="grid">
       <div class="card">
+        <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:8px;">Fault type</label>
+        <div class="fault-type-grid">
+          <button class="fault-type-btn active" data-type="3ph">3-Phase</button>
+          <button class="fault-type-btn" data-type="2ph">Phase-Phase</button>
+          <button class="fault-type-btn" data-type="1ph">Single Phase-Earth</button>
+          <button class="fault-type-btn" data-type="2phe">Phase-Phase-Earth</button>
+        </div>
         <div class="field"><label>Nominal system voltage, line-line (kV)</label><input id="fVn" type="number" value="11" step="0.1"></div>
-        <div class="field"><label>Source / transformer impedance to fault (%Z, on transformer base)</label><input id="fZpc" type="number" value="6" step="0.1"></div>
+        <div class="field"><label>Source / transformer impedance to fault (%Z, positive-seq)</label><input id="fZpc" type="number" value="6" step="0.1"></div>
         <div class="field"><label>Transformer / source rated MVA</label><input id="fMva" type="number" value="10" step="0.1"></div>
+        <div class="field"><label>Zero-sequence impedance ratio Z0/Z1 (for earth faults)</label><input id="fZ0Ratio" type="number" value="1.5" step="0.1"></div>
         <div class="field"><label>Voltage factor c (IEC 60909)</label>
           <select id="fC">
-            <option value="1.1">c=1.1 (max fault, LV/MV per IEC 60909)</option>
+            <option value="1.1">c=1.1 (max fault, LV/MV)</option>
             <option value="1.0">c=1.0 (nominal)</option>
             <option value="0.95">c=0.95 (min fault)</option>
           </select>
         </div>
         <div class="field"><label>X/R ratio (for asymmetry factor)</label><input id="fXr" type="number" value="15" step="0.1"></div>
-        <button class="btn" id="fCalcBtn" style="width:100%;">Calculate</button>
       </div>
-      <div class="chart-wrap">
-        <canvas id="sldCanvas" width="560" height="380" style="max-width:100%;"></canvas>
+      <div class="card">
+        <canvas id="sldCanvas" width="560" height="360" style="max-width:100%;"></canvas>
         <div id="fResults" class="results"></div>
-        <div class="note">I''k = c × Vn / (√3 × Zsource). Base impedance Zbase = Vn² / MVA. Peak asymmetrical factor κ ≈ 1.02 + 0.98·e^(-3·R/X). Diagram is a simplified single-source, single-transformer SLD for visualisation only — verify against full network fault study for protection grading &amp; equipment rating (AS/NZS 3000, AS 62271).</div>
       </div>
     </div>
+    <div class="card" style="margin-top:16px;">
+      <p class="note" style="margin:0;">I''k formulas (IEC 60909, simplified): 3-phase = c·Vn/(√3·Z1). Phase-phase = c·Vn/(2·Z1). Single phase-earth = √3·c·Vn/(2·Z1+Z0). Phase-phase-earth uses combined parallel sequence networks. Base impedance Zbase = Vn²/MVA; peak asymmetry factor κ ≈ 1.02 + 0.98·e<sup>(-3·R/X)</sup>. Diagram is a simplified single-source SLD for visualisation only — verify against a full network fault study for protection grading &amp; equipment rating (AS/NZS 3000, AS 62271).</p>
+    </div>
   `;
-  ['fVn','fZpc','fMva','fC','fXr'].forEach(id => {
+  document.querySelectorAll('.fault-type-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.fault-type-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentFaultType = btn.dataset.type;
+      calcFault();
+    };
+  });
+  ['fVn','fZpc','fMva','fZ0Ratio','fC','fXr'].forEach(id => {
     document.getElementById(id).oninput = calcFault;
   });
-  document.getElementById('fCalcBtn').onclick = calcFault;
   calcFault();
 }
 
-function drawSLD(vn, mva, zpc, ikA_sym, ipeak){
+function drawSLD(vn, mva, zpc, ikA, ipeak, faultLabel){
   const canvas = document.getElementById('sldCanvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -608,107 +717,141 @@ function drawSLD(vn, mva, zpc, ikA_sym, ipeak){
   ctx.lineTo(txX-4, faultY+4);
   ctx.lineTo(txX+boltSize, faultY+boltSize);
   ctx.stroke();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = '#9fb0cf';
-
-  ctx.fillStyle = '#ff6b6b';
-  ctx.font = 'bold 14px Segoe UI';
-  ctx.fillText('3-PHASE FAULT', txX+28, faultY+4);
-  ctx.font = 'bold 16px Segoe UI';
-  ctx.fillText(`I''k = ${ikA_sym.toFixed(2)} kA`, txX+28, faultY+26);
-  ctx.font = '13px Segoe UI';
-  ctx.fillStyle = '#9fb0cf';
-  ctx.fillText(`ip = ${ipeak.toFixed(2)} kA`, txX+28, faultY+46);
 
   ctx.beginPath();
   ctx.moveTo(txX, faultY+4);
-  ctx.lineTo(txX, faultY+60);
+  ctx.lineTo(txX, faultY+50);
   ctx.strokeStyle = '#9fb0cf';
+  ctx.lineWidth = 2;
   ctx.stroke();
   ctx.beginPath();
-  ctx.moveTo(txX-15, faultY+60);
-  ctx.lineTo(txX+15, faultY+60);
-  ctx.moveTo(txX-10, faultY+68);
-  ctx.lineTo(txX+10, faultY+68);
-  ctx.moveTo(txX-5, faultY+76);
-  ctx.lineTo(txX+5, faultY+76);
+  ctx.moveTo(txX-15, faultY+50);
+  ctx.lineTo(txX+15, faultY+50);
+  ctx.moveTo(txX-10, faultY+58);
+  ctx.lineTo(txX+10, faultY+58);
+  ctx.moveTo(txX-5, faultY+66);
+  ctx.lineTo(txX+5, faultY+66);
   ctx.stroke();
+
+  const boxY = faultY + 90;
+  ctx.fillStyle = 'rgba(255,107,107,0.1)';
+  ctx.fillRect(30, boxY, w-60, 70);
+  ctx.strokeStyle = '#ff6b6b';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(30, boxY, w-60, 70);
+  ctx.fillStyle = '#ff6b6b';
+  ctx.font = 'bold 14px Segoe UI';
+  ctx.fillText(faultLabel, 44, boxY+22);
+  ctx.font = 'bold 16px Segoe UI';
+  ctx.fillText(`I''k = ${ikA.toFixed(2)} kA`, 44, boxY+42);
+  ctx.font = '13px Segoe UI';
+  ctx.fillStyle = '#9fb0cf';
+  ctx.fillText(`ip = ${ipeak.toFixed(2)} kA`, 44, boxY+60);
 }
 
+const FAULT_LABELS = {
+  '3ph': '3-PHASE FAULT',
+  '2ph': 'PHASE-PHASE FAULT',
+  '1ph': 'SINGLE PHASE-EARTH FAULT',
+  '2phe': 'PHASE-PHASE-EARTH FAULT',
+};
+
 function calcFault(){
-  const Vn = parseFloat(document.getElementById('fVn').value);
-  const Zpc = parseFloat(document.getElementById('fZpc').value);
-  const Mva = parseFloat(document.getElementById('fMva').value);
-  const c = parseFloat(document.getElementById('fC').value);
-  const xr = parseFloat(document.getElementById('fXr').value);
+  const Vn = safeNum(document.getElementById('fVn').value, 11);
+  const Zpc = safeNum(document.getElementById('fZpc').value, 6);
+  const Mva = safeNum(document.getElementById('fMva').value, 10);
+  const Z0Ratio = safeNum(document.getElementById('fZ0Ratio').value, 1.5);
+  const c = safeNum(document.getElementById('fC').value, 1.1);
+  const xr = safeNum(document.getElementById('fXr').value, 15);
 
   const Zbase = (Vn*Vn)/Mva;
-  const Zactual = (Zpc/100)*Zbase;
-  const IkA_sym = (c*Vn*1000) / (Math.sqrt(3)*Zactual) / 1000;
+  const Z1 = (Zpc/100)*Zbase;
+  const Z0 = Z1 * Z0Ratio;
+  const Z2 = Z1;
+
+  let IkA;
+  if (currentFaultType === '3ph'){
+    IkA = (c*Vn*1000) / (Math.sqrt(3)*Z1) / 1000;
+  } else if (currentFaultType === '2ph'){
+    IkA = (c*Vn*1000) / (2*Z1) / 1000;
+  } else if (currentFaultType === '1ph'){
+    IkA = (Math.sqrt(3)*c*Vn*1000) / (2*Z1+Z0) / 1000;
+  } else {
+    const Ea = c*Vn*1000/Math.sqrt(3);
+    const I1 = Ea / (Z1 + (Z2*Z0)/(Z2+Z0));
+    const I2 = -I1 * Z0/(Z2+Z0);
+    const I0 = -I1 * Z2/(Z2+Z0);
+    const aOp = polarToRect(1,120);
+    const a2Op = polarToRect(1,240);
+    const Ib = complexAdd({re:I0,im:0}, complexAdd(complexMul(a2Op,{re:I1,im:0}), complexMul(aOp,{re:I2,im:0})));
+    IkA = rectToPolar(Ib).mag / 1000;
+  }
+
   const IkA_base = Mva/(Math.sqrt(3)*Vn);
   const kappa = 1.02 + 0.98*Math.exp(-3/xr);
-  const ipeak = kappa * Math.sqrt(2) * IkA_sym;
+  const ipeak = kappa * Math.sqrt(2) * IkA;
 
   document.getElementById('fResults').innerHTML = `
     <div class="result-line"><span>Base impedance (Zbase)</span><b>${Zbase.toFixed(4)} Ω</b></div>
-    <div class="result-line"><span>Actual fault-path impedance</span><b>${Zactual.toFixed(4)} Ω</b></div>
+    <div class="result-line"><span>Positive-seq impedance Z1</span><b>${Z1.toFixed(4)} Ω</b></div>
+    <div class="result-line"><span>Zero-seq impedance Z0</span><b>${Z0.toFixed(4)} Ω</b></div>
     <div class="result-line"><span>Rated full-load current</span><b>${IkA_base.toFixed(3)} kA</b></div>
-    <div class="result-line"><span>Symmetrical fault current I''k</span><b>${IkA_sym.toFixed(3)} kA</b></div>
+    <div class="result-line"><span>Fault current I''k (${FAULT_LABELS[currentFaultType]})</span><b>${IkA.toFixed(3)} kA</b></div>
     <div class="result-line"><span>Asymmetry factor κ</span><b>${kappa.toFixed(3)}</b></div>
     <div class="result-line"><span>Peak fault current ip</span><b>${ipeak.toFixed(3)} kA</b></div>
   `;
 
-  drawSLD(Vn, Mva, Zpc, IkA_sym, ipeak);
+  drawSLD(Vn, Mva, Zpc, IkA, ipeak, FAULT_LABELS[currentFaultType]);
 }
 
-// ===================== Transformer FLC & Fault Current =====================
+// ===================== Transformer FLC & Fault Current (redesigned, compact) =====================
 function renderTxfmr(container){
   container.innerHTML = `
     <h2>Transformer FLC &amp; Fault Current <span class="std-badge">IEC 60076 / IEC 60909 (simplified)</span></h2>
-    <p class="tool-desc">Calculate transformer full-load current (FLC) on primary and secondary windings, and the expected three-phase fault current at the transformer terminals from nameplate MVA, voltage ratio and %impedance. Includes an optional upstream source fault level to combine source and transformer impedance.</p>
+    <p class="tool-desc">Full-load current and expected fault current from transformer nameplate data.</p>
     <div class="grid">
       <div class="card">
-        <div class="field"><label>Transformer rated power (MVA)</label><input id="tMva" type="number" value="10" step="0.1"></div>
-        <div class="row2">
-          <div class="field"><label>Primary voltage, line-line (kV)</label><input id="tVp" type="number" value="66" step="0.1"></div>
-          <div class="field"><label>Secondary voltage, line-line (kV)</label><input id="tVs" type="number" value="11" step="0.1"></div>
-        </div>
-        <div class="field"><label>Transformer impedance %Z (nameplate)</label><input id="tZpc" type="number" value="8" step="0.1"></div>
-        <div class="field"><label>Voltage factor c (IEC 60909)</label>
-          <select id="tC">
-            <option value="1.1">c=1.1 (max fault, LV/MV per IEC 60909)</option>
-            <option value="1.0">c=1.0 (nominal)</option>
-            <option value="0.95">c=0.95 (min fault)</option>
-          </select>
+        <div class="compact-form">
+          <div class="field"><label>Rated power (MVA)</label><input id="tMva" type="number" value="10" step="0.1"></div>
+          <div class="field"><label>Impedance %Z</label><input id="tZpc" type="number" value="8" step="0.1"></div>
+          <div class="field"><label>Primary kV</label><input id="tVp" type="number" value="66" step="0.1"></div>
+          <div class="field"><label>Secondary kV</label><input id="tVs" type="number" value="11" step="0.1"></div>
+          <div class="field full"><label>Voltage factor c (IEC 60909)</label>
+            <select id="tC">
+              <option value="1.1">c=1.1 (max fault)</option>
+              <option value="1.0">c=1.0 (nominal)</option>
+              <option value="0.95">c=0.95 (min fault)</option>
+            </select>
+          </div>
         </div>
         <hr style="border-color:var(--border);margin:14px 0;">
-        <div class="checkrow"><input type="checkbox" id="tUseSource"><label for="tUseSource" style="margin:0;">Include upstream source fault level (finite source)</label></div>
-        <div class="field"><label>Upstream source fault level at primary bus (MVA, 3-phase)</label><input id="tSourceMva" type="number" value="500" step="1"></div>
-        <button class="btn" id="tCalcBtn" style="width:100%;">Calculate</button>
+        <div class="checkrow"><input type="checkbox" id="tUseSource"><label for="tUseSource" style="margin:0;">Include upstream source fault level</label></div>
+        <div class="field"><label>Upstream source fault level (MVA)</label><input id="tSourceMva" type="number" value="500" step="1"></div>
       </div>
       <div class="card">
-        <h3 style="margin-top:0;font-size:1rem;">Results</h3>
-        <div id="tResults" class="results"></div>
-        <div class="note">FLC = MVA×10<sup>6</sup> / (√3 × kV×10<sup>3</sup>). Infinite-source fault current at terminals = FLC / (%Z/100). When an upstream source fault level is included, transformer %Z and equivalent source %Z (on transformer base) are combined in series: Z_total% = Z_source% + Z_xfmr%, where Z_source% = (MVA_xfmr / MVA_source) × 100.</div>
+        <table class="ref-table" id="tResultsTable">
+        </table>
       </div>
+    </div>
+    <div class="card" style="margin-top:16px;">
+      <p class="note" style="margin:0;">FLC = MVA×10<sup>6</sup> / (√3×kV×10<sup>3</sup>). Infinite-source fault current = FLC / (%Z/100). With a finite source, combine impedances in series: Z_total% = Z_source% + Z_xfmr%, where Z_source% = (MVA_xfmr / MVA_source) × 100.</p>
     </div>
   `;
   ['tMva','tVp','tVs','tZpc','tC','tUseSource','tSourceMva'].forEach(id => {
     document.getElementById(id).addEventListener('input', calcTxfmr);
     document.getElementById(id).addEventListener('change', calcTxfmr);
   });
-  document.getElementById('tCalcBtn').onclick = calcTxfmr;
   calcTxfmr();
 }
 
 function calcTxfmr(){
-  const mva = parseFloat(document.getElementById('tMva').value);
-  const vp = parseFloat(document.getElementById('tVp').value);
-  const vs = parseFloat(document.getElementById('tVs').value);
-  const zpc = parseFloat(document.getElementById('tZpc').value);
-  const c = parseFloat(document.getElementById('tC').value);
+  const mva = safeNum(document.getElementById('tMva').value, 10);
+  const vp = safeNum(document.getElementById('tVp').value, 66);
+  const vs = safeNum(document.getElementById('tVs').value, 11);
+  const zpc = safeNum(document.getElementById('tZpc').value, 8);
+  const c = safeNum(document.getElementById('tC').value, 1.1);
   const useSource = document.getElementById('tUseSource').checked;
-  const sourceMva = parseFloat(document.getElementById('tSourceMva').value);
+  const sourceMva = safeNum(document.getElementById('tSourceMva').value, 500);
 
   const flcPrimary = (mva*1e6) / (Math.sqrt(3)*vp*1e3);
   const flcSecondary = (mva*1e6) / (Math.sqrt(3)*vs*1e3);
@@ -721,65 +864,131 @@ function calcTxfmr(){
   const faultSecondary_withSource = flcSecondary / (zTotalPct/100) * c;
   const faultPrimary_withSource = flcPrimary / (zTotalPct/100) * c;
 
-  let sourceRows = '';
+  let rows = `
+    <thead><tr><th>Quantity</th><th>Primary (${vp} kV)</th><th>Secondary (${vs} kV)</th></tr></thead>
+    <tbody>
+      <tr><td>Full-load current</td><td>${flcPrimary.toFixed(1)} A</td><td>${flcSecondary.toFixed(1)} A</td></tr>
+      <tr><td>Fault current (infinite source)</td><td>${faultPrimary_infinite.toFixed(0)} A (${(faultPrimary_infinite/1000).toFixed(2)} kA)</td><td>${faultSecondary_infinite.toFixed(0)} A (${(faultSecondary_infinite/1000).toFixed(2)} kA)</td></tr>
+  `;
   if (useSource){
-    sourceRows = `
-      <div class="result-line"><span>Equivalent source %Z (on transformer base)</span><b>${zSourcePctOnXfmrBase.toFixed(3)} %</b></div>
-      <div class="result-line"><span>Combined %Z (source + transformer)</span><b>${zTotalPct.toFixed(3)} %</b></div>
-      <div class="result-flag flag-good">Fault current with finite source, secondary side: ${faultSecondary_withSource.toFixed(1)} A (${(faultSecondary_withSource/1000).toFixed(3)} kA)</div>
-      <div class="result-flag flag-good">Fault current with finite source, primary side: ${faultPrimary_withSource.toFixed(1)} A (${(faultPrimary_withSource/1000).toFixed(3)} kA)</div>
+    rows += `
+      <tr><td>Fault current (finite source, Z_total=${zTotalPct.toFixed(2)}%)</td><td>${faultPrimary_withSource.toFixed(0)} A (${(faultPrimary_withSource/1000).toFixed(2)} kA)</td><td>${faultSecondary_withSource.toFixed(0)} A (${(faultSecondary_withSource/1000).toFixed(2)} kA)</td></tr>
     `;
   }
-
-  document.getElementById('tResults').innerHTML = `
-    <div class="result-line"><span>Full-load current, primary (${vp} kV)</span><b>${flcPrimary.toFixed(2)} A</b></div>
-    <div class="result-line"><span>Full-load current, secondary (${vs} kV)</span><b>${flcSecondary.toFixed(2)} A</b></div>
-    <div class="result-line"><span>Turns/current ratio (approx.)</span><b>${(vp/vs).toFixed(3)} : 1</b></div>
-    <div class="result-line"><span>Fault current, primary (infinite source)</span><b>${faultPrimary_infinite.toFixed(1)} A (${(faultPrimary_infinite/1000).toFixed(3)} kA)</b></div>
-    <div class="result-line"><span>Fault current, secondary (infinite source)</span><b>${faultSecondary_infinite.toFixed(1)} A (${(faultSecondary_infinite/1000).toFixed(3)} kA)</b></div>
-    ${sourceRows}
-  `;
+  rows += `</tbody>`;
+  document.getElementById('tResultsTable').innerHTML = rows;
 }
 
 // ===================== Arc Flash Quick Reference =====================
 function renderArcFlash(container){
   container.innerHTML = `
     <h2>Arc Flash Quick Reference <span class="std-badge">AS/NZS 4836 · IEC 61482 · IEC/TR 60909</span></h2>
-    <p class="tool-desc">Arc flash energy in Australia is generally assessed using the IEEE 1584 incident-energy method combined with AS/NZS 4836 electrical safety work practice requirements — there is no standalone Australian arc-flash calculation standard. This panel gives PPE category guidance and links the relevant standards; use dedicated software (ETAP, SKM, EasyPower or PowerFactory arc-flash module) for a site incident-energy calculation.</p>
+    <p class="tool-desc">PPE category guidance and standards links. Use dedicated software for a site incident-energy calculation.</p>
     <div class="card">
       <table class="ref-table">
         <thead><tr><th>Standard</th><th>Scope</th></tr></thead>
         <tbody>
-          <tr><td>IEEE 1584-2018</td><td>Incident energy &amp; arc-flash boundary calculation method (most widely used basis for AU studies)</td></tr>
-          <tr><td>AS/NZS 4836:2023</td><td>Safe working on or near low-voltage and high-voltage electrical installations — PPE &amp; work practice requirements</td></tr>
-          <tr><td>IEC 61482-1-1 / -2</td><td>Test methods &amp; requirements for arc-rated clothing (open arc / box test)</td></tr>
-          <tr><td>IEC/TR 60909</td><td>Short-circuit current basis often used as input to incident energy studies</td></tr>
-          <tr><td>AS 2067</td><td>Substation earthing, switchgear &amp; general HV substation design — relevant boundary conditions for arc studies</td></tr>
+          <tr><td>IEEE 1584-2018</td><td>Incident energy &amp; arc-flash boundary calculation method</td></tr>
+          <tr><td>AS/NZS 4836:2023</td><td>Safe working on or near electrical installations — PPE &amp; work practice</td></tr>
+          <tr><td>IEC 61482-1-1 / -2</td><td>Test methods for arc-rated clothing</td></tr>
+          <tr><td>IEC/TR 60909</td><td>Short-circuit current basis for incident energy studies</td></tr>
+          <tr><td>AS 2067</td><td>Substation earthing, switchgear &amp; general HV substation design</td></tr>
         </tbody>
       </table>
     </div>
     <div class="card" style="margin-top:16px;">
-      <h3 style="margin-top:0;font-size:1rem;">Indicative PPE categories (guidance only — confirm with site incident-energy study)</h3>
+      <h3 style="margin-top:0;font-size:1rem;">Indicative PPE categories</h3>
       <table class="ref-table">
-        <thead><tr><th>Incident energy at working distance</th><th>Typical PPE category</th><th>Minimum ATPV/EBT</th></tr></thead>
+        <thead><tr><th>Incident energy</th><th>PPE category</th><th>Min. ATPV/EBT</th></tr></thead>
         <tbody>
           <tr><td>&le; 1.2 cal/cm²</td><td>Category 1</td><td>4 cal/cm²</td></tr>
           <tr><td>&le; 8 cal/cm²</td><td>Category 2</td><td>8 cal/cm²</td></tr>
           <tr><td>&le; 25 cal/cm²</td><td>Category 3</td><td>25 cal/cm²</td></tr>
           <tr><td>&le; 40 cal/cm²</td><td>Category 4</td><td>40 cal/cm²</td></tr>
-          <tr><td>&gt; 40 cal/cm²</td><td>No safe PPE — de-energise / remote switching required</td><td>—</td></tr>
+          <tr><td>&gt; 40 cal/cm²</td><td>No safe PPE — de-energise</td><td>—</td></tr>
         </tbody>
       </table>
-      <div class="note">Category boundaries follow the widely used NFPA 70E-style banding referenced informally in Australian practice; always base actual PPE selection on the calculated incident energy from a full study, not this table alone.</div>
+      <div class="note">Always base actual PPE selection on the calculated incident energy from a full study.</div>
     </div>
   `;
 }
 
-// ===================== App Shell =====================
+// ===================== Standards Library / References =====================
+const REFERENCE_DOCS = {
+  'General': [
+    {name:'AS 2067-2016 — Substations and HV installations exceeding 1 kV a.c.', std:'AS 2067'},
+  ],
+  'Switchgear': [
+    {name:'AS IEC 62271-1-2017 — Switchgear Standards', std:'AS IEC 62271-1'},
+    {name:'AS IEC 62271-200-2026 — Switchgear Standards', std:'AS IEC 62271-200'},
+  ],
+  'Instrument Transformers': [
+    {name:'AS 60044.1-2007 — Current transformers', std:'AS 60044.1'},
+    {name:'AS 60044.2-2007 — Voltage transformers', std:'AS 60044.2'},
+    {name:'AS 60044.3-2004 — Combined transformers', std:'AS 60044.3'},
+    {name:'AS 61869.1-2024 — Instrument transformers, General', std:'AS 61869.1'},
+    {name:'AS 61869.2-2021 — Current transformers', std:'AS 61869.2'},
+    {name:'AS 61869.4-2021 — Additional standards', std:'AS 61869.4'},
+    {name:'AS 61869.5-2021 — Additional standards', std:'AS 61869.5'},
+  ],
+  'Power Transformers': [
+    {name:'AS 2374.1-1997 — General', std:'AS 2374.1'},
+    {name:'AS 2374.2-1997 — General', std:'AS 2374.2'},
+    {name:'AS 2374.3.0-1982 — General', std:'AS 2374.3.0'},
+    {name:'AS 2374.3.1-1992 — General', std:'AS 2374.3.1'},
+    {name:'AS 2374.4-1982 — General', std:'AS 2374.4'},
+    {name:'AS 2374.6-1994 — General', std:'AS 2374.6'},
+    {name:'AS 2374.8-2000 — General', std:'AS 2374.8'},
+    {name:'AS/NZS 60076.1-2014 — General', std:'AS/NZS 60076.1'},
+  ],
+  'Protection Devices': [
+    {name:'AS/NZS 60255.1-2025 — Measuring relays and protection equipment', std:'AS/NZS 60255.1'},
+    {name:'AS/NZS 60255.26-2025 — Protection devices', std:'AS/NZS 60255.26'},
+    {name:'AS/NZS 60255.127-2025 — Protection devices', std:'AS/NZS 60255.127'},
+    {name:'AS/NZS 60255.181-2025 — Measuring relays and protection equipment', std:'AS/NZS 60255.181'},
+  ],
+};
+
+function renderReferences(container){
+  const cats = Object.keys(REFERENCE_DOCS);
+  container.innerHTML = `
+    <h2>Standards Library <span class="std-badge">AS / AS-NZS / IEC</span></h2>
+    <p class="tool-desc">Reference index of standards used across this toolkit. This is a document index only — the standards themselves are copyrighted publications and must be sourced from SAI Global / Standards Australia or your organisation's library.</p>
+    <div class="card">
+      <div class="ref-tabs" id="refTabs">
+        ${cats.map((cat,i) => `<button class="ref-tab-btn ${i===0?'active':''}" data-cat="${cat}">${cat}</button>`).join('')}
+      </div>
+      <div id="refPanels">
+        ${cats.map((cat,i) => `
+          <div class="ref-panel ${i===0?'active':''}" data-panel="${cat}">
+            ${REFERENCE_DOCS[cat].map(d => `<div class="ref-doc-link"><span>${d.name}</span><span class="std-badge">${d.std}</span></div>`).join('')}
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  document.querySelectorAll('.ref-tab-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.ref-tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.ref-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelector(`.ref-panel[data-panel="${btn.dataset.cat}"]`).classList.add('active');
+    };
+  });
+}
+
+// ===================== App Shell with Dropdown Nav =====================
 function initApp(){
   const nav = document.getElementById('tabnav');
   const app = document.getElementById('app');
-  nav.innerHTML = TOOLS.map(t => `<button data-tool="${t.id}">${t.label}</button>`).join('');
+  nav.innerHTML = TOOL_GROUPS.map(g => `
+    <div class="nav-group">
+      <button class="nav-group-btn">${g.label} ▾</button>
+      <div class="nav-dropdown">
+        ${g.tools.map(t => `<button data-tool="${t.id}">${t.label}</button>`).join('')}
+      </div>
+    </div>
+  `).join('');
   app.innerHTML = TOOLS.map(t => `<section class="tool-panel" id="panel-${t.id}"></section>`).join('');
 
   const renderers = {
@@ -790,10 +999,11 @@ function initApp(){
     fault: renderFault,
     txfmr: renderTxfmr,
     arcflash: renderArcFlash,
+    references: renderReferences,
   };
 
   function activate(id){
-    document.querySelectorAll('.tabnav button').forEach(b => b.classList.toggle('active', b.dataset.tool===id));
+    document.querySelectorAll('.nav-dropdown button').forEach(b => b.classList.toggle('active', b.dataset.tool===id));
     document.querySelectorAll('.tool-panel').forEach(p => p.classList.toggle('active', p.id===`panel-${id}`));
     const panel = document.getElementById(`panel-${id}`);
     if (!panel.dataset.rendered){
@@ -802,7 +1012,7 @@ function initApp(){
     }
   }
 
-  nav.querySelectorAll('button').forEach(b => b.onclick = () => activate(b.dataset.tool));
+  nav.querySelectorAll('button[data-tool]').forEach(b => b.onclick = () => activate(b.dataset.tool));
   activate(TOOLS[0].id);
 }
 
