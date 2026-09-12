@@ -1,5 +1,5 @@
 
-// ===================== Protection Engineering Toolkit v0.4.0 =====================
+// ===================== Protection Engineering Toolkit v0.4.1 =====================
 const TOOL_GROUPS = [
   {
     label: 'Overcurrent',
@@ -913,7 +913,7 @@ function renderArcFlash(container){
   `;
 }
 
-// ===================== Standards Library / References =====================
+// ===================== Standards Library / References (fixed: index-based tab matching) =====================
 const REFERENCE_DOCS = {
   'General': [
     {name:'AS 2067-2016 — Substations and HV installations exceeding 1 kV a.c.', std:'AS 2067'},
@@ -956,36 +956,39 @@ function renderReferences(container){
     <p class="tool-desc">Reference index of standards used across this toolkit. This is a document index only — the standards themselves are copyrighted publications and must be sourced from SAI Global / Standards Australia or your organisation's library.</p>
     <div class="card">
       <div class="ref-tabs" id="refTabs">
-        ${cats.map((cat,i) => `<button class="ref-tab-btn ${i===0?'active':''}" data-cat="${cat}">${cat}</button>`).join('')}
+        ${cats.map((cat,i) => `<button class="ref-tab-btn ${i===0?'active':''}" data-idx="${i}">${cat}</button>`).join('')}
       </div>
       <div id="refPanels">
         ${cats.map((cat,i) => `
-          <div class="ref-panel ${i===0?'active':''}" data-panel="${cat}">
+          <div class="ref-panel ${i===0?'active':''}" data-idx="${i}">
             ${REFERENCE_DOCS[cat].map(d => `<div class="ref-doc-link"><span>${d.name}</span><span class="std-badge">${d.std}</span></div>`).join('')}
           </div>
         `).join('')}
       </div>
     </div>
   `;
-  document.querySelectorAll('.ref-tab-btn').forEach(btn => {
-    btn.onclick = () => {
-      document.querySelectorAll('.ref-tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.ref-panel').forEach(p => p.classList.remove('active'));
+  const tabBtns = container.querySelectorAll('.ref-tab-btn');
+  const panels = container.querySelectorAll('.ref-panel');
+  tabBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      tabBtns.forEach(b => b.classList.remove('active'));
+      panels.forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
-      document.querySelector(`.ref-panel[data-panel="${btn.dataset.cat}"]`).classList.add('active');
-    };
+      const idx = btn.dataset.idx;
+      container.querySelector(`.ref-panel[data-idx="${idx}"]`).classList.add('active');
+    });
   });
 }
 
-// ===================== App Shell with Dropdown Nav =====================
+// ===================== App Shell with Click-Toggle Dropdown Nav (fixed) =====================
 function initApp(){
   const nav = document.getElementById('tabnav');
   const app = document.getElementById('app');
-  nav.innerHTML = TOOL_GROUPS.map(g => `
-    <div class="nav-group">
-      <button class="nav-group-btn">${g.label} ▾</button>
+  nav.innerHTML = TOOL_GROUPS.map((g, gi) => `
+    <div class="nav-group" data-group="${gi}">
+      <button class="nav-group-btn" type="button">${g.label} ▾</button>
       <div class="nav-dropdown">
-        ${g.tools.map(t => `<button data-tool="${t.id}">${t.label}</button>`).join('')}
+        ${g.tools.map(t => `<button type="button" data-tool="${t.id}">${t.label}</button>`).join('')}
       </div>
     </div>
   `).join('');
@@ -1010,9 +1013,25 @@ function initApp(){
       renderers[id](panel);
       panel.dataset.rendered = '1';
     }
+    document.querySelectorAll('.nav-group').forEach(g => g.classList.remove('open'));
   }
 
-  nav.querySelectorAll('button[data-tool]').forEach(b => b.onclick = () => activate(b.dataset.tool));
+  nav.querySelectorAll('.nav-group-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const group = btn.closest('.nav-group');
+      const wasOpen = group.classList.contains('open');
+      document.querySelectorAll('.nav-group').forEach(g => g.classList.remove('open'));
+      if (!wasOpen) group.classList.add('open');
+    });
+  });
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.nav-group').forEach(g => g.classList.remove('open'));
+  });
+  nav.querySelectorAll('button[data-tool]').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    activate(b.dataset.tool);
+  }));
   activate(TOOLS[0].id);
 }
 
