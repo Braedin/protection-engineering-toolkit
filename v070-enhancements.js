@@ -1,25 +1,9 @@
-// ===================== v0.7.0 Enhancements (additive, non-destructive) =====================
-// Adds unit toggles + single-phase fault current to the Transformer tool,
-// and renders KaTeX formula reference blocks, without modifying app.js.
+// ===================== v0.7.0 Enhancements v2 (additive, non-destructive) =====================
+// Scoped strictly by panel id to avoid cross-panel bleed. Uses app's own CSS classes.
 (function () {
   function onReady(fn) {
     if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(fn, 0);
     else document.addEventListener('DOMContentLoaded', fn);
-  }
-
-  function findPanelByHeading(regex) {
-    var panels = document.querySelectorAll('.tool-panel, main, #app, body');
-    for (var i = 0; i < panels.length; i++) {
-      var h = panels[i].querySelector('h2, h3');
-      if (h && regex.test(h.textContent)) return panels[i];
-    }
-    var heads = document.querySelectorAll('h2, h3');
-    for (var j = 0; j < heads.length; j++) {
-      if (regex.test(heads[j].textContent)) {
-        return heads[j].closest('.tool-panel') || heads[j].parentElement;
-      }
-    }
-    return null;
   }
 
   function renderKatexInto(el, tex, displayMode) {
@@ -30,22 +14,21 @@
     el.textContent = tex;
   }
 
-  function addFormulaBlock(panel, title, formulas) {
+  function addFormulaBlock(panelId, title, formulas) {
+    var panel = document.getElementById(panelId);
     if (!panel || panel.querySelector('.v070-formula-block')) return;
     var block = document.createElement('div');
-    block.className = 'v070-formula-block';
+    block.className = 'card v070-formula-block';
     block.style.marginTop = '16px';
-    block.style.paddingTop = '10px';
-    block.style.borderTop = '1px solid rgba(159,176,207,0.25)';
     var h = document.createElement('h3');
     h.textContent = title;
-    h.style.fontSize = '0.95rem';
-    h.style.color = 'var(--text-dim, #9fb0cf)';
     h.style.marginTop = '0';
+    h.style.fontSize = '0.95rem';
+    h.style.color = 'var(--text-dim)';
     block.appendChild(h);
     formulas.forEach(function (f) {
       var d = document.createElement('div');
-      d.style.margin = '8px 0';
+      d.style.margin = '10px 0';
       block.appendChild(d);
       renderKatexInto(d, f, true);
     });
@@ -53,96 +36,93 @@
   }
 
   function enhanceTransformerTool() {
-    var panel = findPanelByHeading(/Transformer/i);
-    if (!panel) return false;
-    if (panel.querySelector('.v070-unit-toggle')) return true;
+    var panel = document.getElementById('panel-txfmr');
+    if (!panel || panel.querySelector('.v070-unit-toggle')) return;
 
-    var numberInputs = Array.prototype.slice.call(panel.querySelectorAll('input[type="number"]'));
-    if (numberInputs.length < 3) return false;
+    var fields = panel.querySelectorAll('.field');
+    var powerInput = null, vpInput = null, vsInput = null, zpcInput = null;
+    fields.forEach(function (field) {
+      var label = field.querySelector('label');
+      var input = field.querySelector('input[type="number"]');
+      if (!label || !input) return;
+      var t = label.textContent.toLowerCase();
+      if (/rated power|power/.test(t) && !powerInput) powerInput = input;
+      else if (/primary/.test(t) && !vpInput) vpInput = input;
+      else if (/secondary/.test(t) && !vsInput) vsInput = input;
+      else if (/impedance|%z|zpc/.test(t) && !zpcInput) zpcInput = input;
+    });
+    if (!powerInput || !vpInput || !vsInput) return;
 
-    var powerInput = numberInputs[0];
-    var vpInput = numberInputs[1];
-    var vsInput = numberInputs[2];
+    var powerLabel = powerInput.closest('.field').querySelector('label');
 
-    function makeUnitToggle(input, units, defaultUnit) {
-      var wrap = document.createElement('span');
-      wrap.className = 'v070-unit-toggle';
-      wrap.style.marginLeft = '6px';
+    function makeUnitToggle(input, units, defaultUnit, onChangeExtra) {
       var select = document.createElement('select');
-      select.style.marginLeft = '4px';
+      select.className = 'v070-unit-toggle';
+      select.style.marginLeft = '8px';
+      select.style.width = 'auto';
+      select.style.display = 'inline-block';
       units.forEach(function (u) {
         var opt = document.createElement('option');
         opt.value = u; opt.textContent = u;
         if (u === defaultUnit) opt.selected = true;
         select.appendChild(opt);
       });
-      wrap.appendChild(select);
-      input.insertAdjacentElement('afterend', wrap);
+      input.insertAdjacentElement('afterend', select);
       input.dataset.v070Unit = defaultUnit;
       select.addEventListener('change', function () {
         input.dataset.v070Unit = select.value;
+        if (onChangeExtra) onChangeExtra();
         recompute();
       });
       return select;
     }
 
-    makeUnitToggle(powerInput, ['MVA', 'kVA'], 'MVA');
+    makeUnitToggle(powerInput, ['MVA', 'kVA'], 'MVA', function () {
+      if (powerLabel) powerLabel.firstChild.textContent = 'Rated power (' + powerInput.dataset.v070Unit + ')';
+    });
     makeUnitToggle(vpInput, ['kV', 'V'], 'kV');
     makeUnitToggle(vsInput, ['kV', 'V'], 'kV');
+    if (powerLabel) powerLabel.firstChild.textContent = 'Rated power (MVA)';
 
-    var phaseWrap = document.createElement('div');
-    phaseWrap.className = 'v070-phase-toggle';
-    phaseWrap.style.margin = '10px 0';
-    phaseWrap.innerHTML =
-      '<label style="display:block;font-size:0.78rem;color:var(--text-dim,#9fb0cf);margin-bottom:6px;">Fault current phase mode (v0.7 addition)</label>' +
-      '<button type="button" data-phase="3ph" class="v070-phase-btn" style="margin-right:6px;padding:6px 10px;">Three-Phase</button>' +
-      '<button type="button" data-phase="1ph" class="v070-phase-btn" style="padding:6px 10px;">Single-Phase</button>';
-    powerInput.closest('.field, div') && powerInput.parentElement.insertAdjacentElement('afterend', phaseWrap);
+    var phaseCard = document.createElement('div');
+    phaseCard.className = 'field full v070-phase-toggle';
+    phaseCard.style.marginTop = '10px';
+    phaseCard.innerHTML =
+      '<label>Fault current phase mode</label>' +
+      '<div class="fault-type-grid" style="grid-template-columns:1fr 1fr;">' +
+      '<button type="button" class="fault-type-btn v070-phase-btn active" data-phase="3ph">Three-Phase</button>' +
+      '<button type="button" class="fault-type-btn v070-phase-btn" data-phase="1ph">Single-Phase</button>' +
+      '</div>';
+    var compactForm = panel.querySelector('.compact-form');
+    if (compactForm) compactForm.insertAdjacentElement('afterend', phaseCard);
+    else powerInput.closest('.card').appendChild(phaseCard);
 
     var currentPhaseMode = '3ph';
-    var btns = phaseWrap.querySelectorAll('.v070-phase-btn');
+    var btns = phaseCard.querySelectorAll('.v070-phase-btn');
     btns.forEach(function (b) {
       b.addEventListener('click', function () {
-        btns.forEach(function (x) { x.style.outline = ''; });
-        b.style.outline = '2px solid #4fb0ff';
+        btns.forEach(function (x) { x.classList.remove('active'); });
+        b.classList.add('active');
         currentPhaseMode = b.dataset.phase;
         recompute();
       });
     });
-    btns[0].style.outline = '2px solid #4fb0ff';
 
     var resultBox = document.createElement('div');
-    resultBox.className = 'v070-result-box';
-    resultBox.style.marginTop = '10px';
-    resultBox.style.padding = '10px';
-    resultBox.style.border = '1px solid rgba(159,176,207,0.25)';
-    resultBox.style.borderRadius = '6px';
-    resultBox.style.fontSize = '0.85rem';
-    phaseWrap.insertAdjacentElement('afterend', resultBox);
+    resultBox.className = 'results v070-result-box';
+    phaseCard.insertAdjacentElement('afterend', resultBox);
 
     function toMVA(val, unit) { return unit === 'kVA' ? val / 1000 : val; }
     function toKV(val, unit) { return unit === 'V' ? val / 1000 : val; }
     function safeNum(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
-    function findZpcInput() {
-      var labels = panel.querySelectorAll('label');
-      for (var i = 0; i < labels.length; i++) {
-        if (/impedance|%z|zpc/i.test(labels[i].textContent)) {
-          var inp = labels[i].parentElement && labels[i].parentElement.querySelector('input[type="number"]');
-          if (inp) return inp;
-        }
-      }
-      return numberInputs[3] || null;
-    }
-    var zpcInput = findZpcInput();
-
     function recompute() {
       var mva = toMVA(safeNum(powerInput.value), powerInput.dataset.v070Unit || 'MVA');
       var vpKv = toKV(safeNum(vpInput.value), vpInput.dataset.v070Unit || 'kV');
       var vsKv = toKV(safeNum(vsInput.value), vsInput.dataset.v070Unit || 'kV');
-      var zpc = zpcInput ? safeNum(zpcInput.value) : 8;
+      var zpc = zpcInput ? safeNum(zpcInput.value) : 0;
       if (!mva || !vpKv || !vsKv || !zpc) {
-        resultBox.innerHTML = '<em>Enter power, primary/secondary voltage and %Z to see the v0.7 unit-aware result.</em>';
+        resultBox.innerHTML = '<div class="note">Enter power, primary/secondary voltage and %Z to see the phase-mode result.</div>';
         return;
       }
       var flcPrimary = (mva * 1e6) / (Math.sqrt(3) * vpKv * 1e3);
@@ -152,10 +132,10 @@
       var faultPrimary = (flcPrimary / (zpc / 100)) * phaseMultiplier;
       var faultSecondary = (flcSecondary / (zpc / 100)) * phaseMultiplier;
       resultBox.innerHTML =
-        '<div><b>' + phaseLabel + ' result (v0.7 unit-aware)</b></div>' +
-        '<div>Primary FLC: ' + flcPrimary.toFixed(1) + ' A &nbsp; | &nbsp; Secondary FLC: ' + flcSecondary.toFixed(1) + ' A</div>' +
-        '<div>Primary fault current: ' + faultPrimary.toFixed(0) + ' A (' + (faultPrimary/1000).toFixed(2) + ' kA)</div>' +
-        '<div>Secondary fault current: ' + faultSecondary.toFixed(0) + ' A (' + (faultSecondary/1000).toFixed(2) + ' kA)</div>';
+        '<div class="result-line"><span>Primary FLC</span><b>' + flcPrimary.toFixed(1) + ' A</b></div>' +
+        '<div class="result-line"><span>Secondary FLC</span><b>' + flcSecondary.toFixed(1) + ' A</b></div>' +
+        '<div class="result-line"><span>Primary fault current (' + phaseLabel + ')</span><b>' + faultPrimary.toFixed(0) + ' A (' + (faultPrimary/1000).toFixed(2) + ' kA)</b></div>' +
+        '<div class="result-line"><span>Secondary fault current (' + phaseLabel + ')</span><b>' + faultSecondary.toFixed(0) + ' A (' + (faultSecondary/1000).toFixed(2) + ' kA)</b></div>';
     }
 
     [powerInput, vpInput, vsInput, zpcInput].forEach(function (inp) {
@@ -163,51 +143,39 @@
     });
     recompute();
 
-    addFormulaBlock(panel, 'Reference formulas (v0.7 addition)', [
+    addFormulaBlock('panel-txfmr', 'Reference formulas', [
       String.raw`\text{FLC} = \dfrac{S}{\sqrt{3}\,V_{LL}}`,
       String.raw`I''_{k,3\phi} = \dfrac{\text{FLC}}{Z_{pu}}`,
       String.raw`I''_{k,1\phi} = \sqrt{3}\times I''_{k,3\phi}`
     ]);
-
-    return true;
   }
 
   function enhanceFaultLevelTool() {
-    var panel = findPanelByHeading(/Fault Level/i);
-    if (!panel) return false;
-    addFormulaBlock(panel, 'Reference formulas (v0.7 addition)', [
+    addFormulaBlock('panel-fault', 'Reference formulas', [
       String.raw`I''_{k,3\phi} = \dfrac{c \cdot V_n}{\sqrt{3}\,Z_1}`,
       String.raw`I''_{k,1\phi} = \dfrac{\sqrt{3}\,c \cdot V_n}{2Z_1 + Z_0}`
     ]);
-    return true;
   }
 
   function enhanceCTTool() {
-    var panel = findPanelByHeading(/Knee-Point|CT Saturation|Saturation/i);
-    if (!panel) return false;
-    addFormulaBlock(panel, 'Reference formula (v0.7 addition)', [
+    addFormulaBlock('panel-ctsat', 'Reference formula', [
       String.raw`V_k \geq K \times I_{fault,sec} \times (R_{CT} + R_L + R_{relay})`
     ]);
-    return true;
   }
 
   function enhanceTCCTool() {
-    var panel = findPanelByHeading(/Time-Current|TCC/i);
-    if (!panel) return false;
-    addFormulaBlock(panel, 'Reference formula (v0.7 addition)', [
+    addFormulaBlock('panel-tcc', 'Reference formula', [
       String.raw`t = TMS\left(\dfrac{A}{(I/I_s)^p - 1} + B\right)`
     ]);
-    return true;
   }
 
-  function enhanceLossOfFieldTool() {
-    var panel = findPanelByHeading(/Loss of Field/i);
-    if (!panel) return false;
-    addFormulaBlock(panel, 'Reference formulas (v0.7 addition)', [
-      String.raw`Z_B = \dfrac{V^2}{S}\times\dfrac{CT}{PT}`,
-      String.raw`\text{Zone 1 Diameter} = \dfrac{Z_B}{\sqrt{3}\,X_d'}, \quad \text{Zone 2 Diameter} = X_d\,Z_B`
-    ]);
-    return true;
+  function hideLossOfField() {
+    var navBtn = document.querySelector('.side-link[data-tool="lof"]');
+    if (navBtn && navBtn.style.display !== 'none') {
+      navBtn.style.display = 'none';
+    }
+    var panel = document.getElementById('panel-lof');
+    if (panel) panel.style.display = 'none';
   }
 
   function tryEnhanceAll() {
@@ -215,7 +183,7 @@
     enhanceFaultLevelTool();
     enhanceCTTool();
     enhanceTCCTool();
-    enhanceLossOfFieldTool();
+    hideLossOfField();
   }
 
   onReady(function () {
@@ -224,7 +192,7 @@
       tryEnhanceAll();
       attempts++;
       if (attempts > 20) clearInterval(interval);
-    }, 500);
+    }, 300);
 
     var observer = new MutationObserver(function () { tryEnhanceAll(); });
     observer.observe(document.body, { childList: true, subtree: true });
