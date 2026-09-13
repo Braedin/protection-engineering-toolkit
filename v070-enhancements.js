@@ -1,5 +1,6 @@
-// ===================== v0.7.0 Enhancements v2 (additive, non-destructive) =====================
-// Scoped strictly by panel id to avoid cross-panel bleed. Uses app's own CSS classes.
+// ===================== v0.7.0 Enhancements v3 (additive, non-destructive) =====================
+// Scoped strictly by panel id. Unit dropdowns inline with inputs. Transformer type
+// selector (3ph/1ph) at top of form; results pane shows both fault-current figures.
 (function () {
   function onReady(fn) {
     if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(fn, 0);
@@ -41,33 +42,37 @@
 
     var fields = panel.querySelectorAll('.field');
     var powerInput = null, vpInput = null, vsInput = null, zpcInput = null;
+    var powerField = null, vpField = null, vsField = null;
     fields.forEach(function (field) {
       var label = field.querySelector('label');
       var input = field.querySelector('input[type="number"]');
       if (!label || !input) return;
       var t = label.textContent.toLowerCase();
-      if (/rated power|power/.test(t) && !powerInput) powerInput = input;
-      else if (/primary/.test(t) && !vpInput) vpInput = input;
-      else if (/secondary/.test(t) && !vsInput) vsInput = input;
-      else if (/impedance|%z|zpc/.test(t) && !zpcInput) zpcInput = input;
+      if (/rated power|power/.test(t) && !powerInput) { powerInput = input; powerField = field; }
+      else if (/primary/.test(t) && !vpInput) { vpInput = input; vpField = field; }
+      else if (/secondary/.test(t) && !vsInput) { vsInput = input; vsField = field; }
+      else if (/impedance|%z|zpc/.test(t) && !zpcInput) { zpcInput = input; }
     });
     if (!powerInput || !vpInput || !vsInput) return;
 
-    var powerLabel = powerInput.closest('.field').querySelector('label');
-
-    function makeUnitToggle(input, units, defaultUnit, onChangeExtra) {
+    function makeInlineUnitToggle(field, input, units, defaultUnit, onChangeExtra) {
+      var label = field.querySelector('label');
+      if (label) {
+        label.textContent = label.textContent.replace(/\s*\([^)]*\)\s*$/, '').trim();
+      }
+      var row = document.createElement('div');
+      row.className = 'row2';
+      input.insertAdjacentElement('beforebegin', row);
+      row.appendChild(input);
       var select = document.createElement('select');
       select.className = 'v070-unit-toggle';
-      select.style.marginLeft = '8px';
-      select.style.width = 'auto';
-      select.style.display = 'inline-block';
       units.forEach(function (u) {
         var opt = document.createElement('option');
         opt.value = u; opt.textContent = u;
         if (u === defaultUnit) opt.selected = true;
         select.appendChild(opt);
       });
-      input.insertAdjacentElement('afterend', select);
+      row.appendChild(select);
       input.dataset.v070Unit = defaultUnit;
       select.addEventListener('change', function () {
         input.dataset.v070Unit = select.value;
@@ -77,40 +82,36 @@
       return select;
     }
 
-    makeUnitToggle(powerInput, ['MVA', 'kVA'], 'MVA', function () {
-      if (powerLabel) powerLabel.firstChild.textContent = 'Rated power (' + powerInput.dataset.v070Unit + ')';
-    });
-    makeUnitToggle(vpInput, ['kV', 'V'], 'kV');
-    makeUnitToggle(vsInput, ['kV', 'V'], 'kV');
-    if (powerLabel) powerLabel.firstChild.textContent = 'Rated power (MVA)';
+    makeInlineUnitToggle(powerField, powerInput, ['MVA', 'kVA'], 'MVA');
+    makeInlineUnitToggle(vpField, vpInput, ['kV', 'V'], 'kV');
+    makeInlineUnitToggle(vsField, vsInput, ['kV', 'V'], 'kV');
 
-    var phaseCard = document.createElement('div');
-    phaseCard.className = 'field full v070-phase-toggle';
-    phaseCard.style.marginTop = '10px';
-    phaseCard.innerHTML =
-      '<label>Fault current phase mode</label>' +
+    var typeCard = document.createElement('div');
+    typeCard.className = 'field full v070-xfmr-type';
+    typeCard.innerHTML =
+      '<label>Transformer type</label>' +
       '<div class="fault-type-grid" style="grid-template-columns:1fr 1fr;">' +
-      '<button type="button" class="fault-type-btn v070-phase-btn active" data-phase="3ph">Three-Phase</button>' +
-      '<button type="button" class="fault-type-btn v070-phase-btn" data-phase="1ph">Single-Phase</button>' +
+      '<button type="button" class="fault-type-btn v070-type-btn active" data-type="3ph">Three-Phase</button>' +
+      '<button type="button" class="fault-type-btn v070-type-btn" data-type="1ph">Single-Phase</button>' +
       '</div>';
-    var compactForm = panel.querySelector('.compact-form');
-    if (compactForm) compactForm.insertAdjacentElement('afterend', phaseCard);
-    else powerInput.closest('.card').appendChild(phaseCard);
+    powerField.parentElement.insertBefore(typeCard, powerField);
 
-    var currentPhaseMode = '3ph';
-    var btns = phaseCard.querySelectorAll('.v070-phase-btn');
-    btns.forEach(function (b) {
+    var xfmrType = '3ph';
+    var typeBtns = typeCard.querySelectorAll('.v070-type-btn');
+    typeBtns.forEach(function (b) {
       b.addEventListener('click', function () {
-        btns.forEach(function (x) { x.classList.remove('active'); });
+        typeBtns.forEach(function (x) { x.classList.remove('active'); });
         b.classList.add('active');
-        currentPhaseMode = b.dataset.phase;
+        xfmrType = b.dataset.type;
         recompute();
       });
     });
 
     var resultBox = document.createElement('div');
     resultBox.className = 'results v070-result-box';
-    phaseCard.insertAdjacentElement('afterend', resultBox);
+    var zpcField = zpcInput ? zpcInput.closest('.field') : null;
+    if (zpcField) zpcField.insertAdjacentElement('afterend', resultBox);
+    else powerField.closest('.card').appendChild(resultBox);
 
     function toMVA(val, unit) { return unit === 'kVA' ? val / 1000 : val; }
     function toKV(val, unit) { return unit === 'V' ? val / 1000 : val; }
@@ -122,20 +123,21 @@
       var vsKv = toKV(safeNum(vsInput.value), vsInput.dataset.v070Unit || 'kV');
       var zpc = zpcInput ? safeNum(zpcInput.value) : 0;
       if (!mva || !vpKv || !vsKv || !zpc) {
-        resultBox.innerHTML = '<div class="note">Enter power, primary/secondary voltage and %Z to see the phase-mode result.</div>';
+        resultBox.innerHTML = '<div class="note">Enter power, primary/secondary voltage and %Z to see the unit-aware result.</div>';
         return;
       }
-      var flcPrimary = (mva * 1e6) / (Math.sqrt(3) * vpKv * 1e3);
-      var flcSecondary = (mva * 1e6) / (Math.sqrt(3) * vsKv * 1e3);
-      var phaseMultiplier = currentPhaseMode === '1ph' ? Math.sqrt(3) : 1;
-      var phaseLabel = currentPhaseMode === '1ph' ? 'Single-Phase' : 'Three-Phase';
-      var faultPrimary = (flcPrimary / (zpc / 100)) * phaseMultiplier;
-      var faultSecondary = (flcSecondary / (zpc / 100)) * phaseMultiplier;
+      var divisor = xfmrType === '1ph' ? 1 : Math.sqrt(3);
+      var flcPrimary = (mva * 1e6) / (divisor * vpKv * 1e3);
+      var flcSecondary = (mva * 1e6) / (divisor * vsKv * 1e3);
+      var faultPrimary = flcPrimary / (zpc / 100);
+      var faultSecondary = flcSecondary / (zpc / 100);
+      var typeLabel = xfmrType === '1ph' ? 'Single-Phase' : 'Three-Phase';
       resultBox.innerHTML =
+        '<div class="result-line"><span>Transformer type</span><b>' + typeLabel + '</b></div>' +
         '<div class="result-line"><span>Primary FLC</span><b>' + flcPrimary.toFixed(1) + ' A</b></div>' +
         '<div class="result-line"><span>Secondary FLC</span><b>' + flcSecondary.toFixed(1) + ' A</b></div>' +
-        '<div class="result-line"><span>Primary fault current (' + phaseLabel + ')</span><b>' + faultPrimary.toFixed(0) + ' A (' + (faultPrimary/1000).toFixed(2) + ' kA)</b></div>' +
-        '<div class="result-line"><span>Secondary fault current (' + phaseLabel + ')</span><b>' + faultSecondary.toFixed(0) + ' A (' + (faultSecondary/1000).toFixed(2) + ' kA)</b></div>';
+        '<div class="result-line"><span>Primary fault current</span><b>' + faultPrimary.toFixed(0) + ' A (' + (faultPrimary/1000).toFixed(2) + ' kA)</b></div>' +
+        '<div class="result-line"><span>Secondary fault current</span><b>' + faultSecondary.toFixed(0) + ' A (' + (faultSecondary/1000).toFixed(2) + ' kA)</b></div>';
     }
 
     [powerInput, vpInput, vsInput, zpcInput].forEach(function (inp) {
@@ -144,9 +146,8 @@
     recompute();
 
     addFormulaBlock('panel-txfmr', 'Reference formulas', [
-      String.raw`\text{FLC} = \dfrac{S}{\sqrt{3}\,V_{LL}}`,
-      String.raw`I''_{k,3\phi} = \dfrac{\text{FLC}}{Z_{pu}}`,
-      String.raw`I''_{k,1\phi} = \sqrt{3}\times I''_{k,3\phi}`
+      String.raw`\text{FLC}_{3\phi} = \dfrac{S}{\sqrt{3}\,V_{LL}}, \quad \text{FLC}_{1\phi} = \dfrac{S}{V}`,
+      String.raw`I''_k = \dfrac{\text{FLC}}{Z_{pu}}`
     ]);
   }
 
@@ -171,9 +172,7 @@
 
   function hideLossOfField() {
     var navBtn = document.querySelector('.side-link[data-tool="lof"]');
-    if (navBtn && navBtn.style.display !== 'none') {
-      navBtn.style.display = 'none';
-    }
+    if (navBtn && navBtn.style.display !== 'none') navBtn.style.display = 'none';
     var panel = document.getElementById('panel-lof');
     if (panel) panel.style.display = 'none';
   }
