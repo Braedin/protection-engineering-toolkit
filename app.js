@@ -1,9 +1,10 @@
 
-// ===================== Protection Engineering Toolkit v0.5.0 =====================
+// ===================== Protection Engineering Toolkit v0.6.0 =====================
 const TOOL_GROUPS = [
   { label: 'Overcurrent', tools: [ {id:'tcc', label:'TCC Plotter'} ] },
   { label: 'System Analysis', tools: [ {id:'symcomp', label:'Symmetrical Components'}, {id:'fault', label:'Fault Level Calculator'} ] },
   { label: 'Transformers', tools: [ {id:'diff87', label:'Differential (87T)'}, {id:'txfmr', label:'FLC & Fault Current'} ] },
+  { label: 'Generator Protection', tools: [ {id:'lof', label:'Loss of Field (40)'} ] },
   { label: 'CT / Instrument Transformers', tools: [ {id:'ctsat', label:'CT Knee-Point / Saturation'} ] },
   { label: 'Reference', tools: [ {id:'arcflash', label:'Arc Flash Reference'}, {id:'references', label:'Standards Library'} ] },
 ];
@@ -298,6 +299,116 @@ function calcTxfmr(){
   if (useSource){ rows += `<tr><td>Fault current (finite source, Z_total=${zTotalPct.toFixed(2)}%)</td><td>${faultPrimary_withSource.toFixed(0)} A (${(faultPrimary_withSource/1000).toFixed(2)} kA)</td><td>${faultSecondary_withSource.toFixed(0)} A (${(faultSecondary_withSource/1000).toFixed(2)} kA)</td></tr>`; }
   rows += `</tbody>`; document.getElementById('tResultsTable').innerHTML = rows;
 }
+
+// ===================== Loss of Field (40) Mho Setting Calculator =====================
+let lofChart = null;
+function renderLossOfField(container){
+  container.innerHTML = `
+    <h2>Loss of Field (40) Mho Setting Calculator <span class="std-badge">Dual Mho, R-X Plane</span></h2>
+    <p class="tool-desc">Calculate dual-zone offset mho loss-of-field settings from generator nameplate data, and visualise the characteristic on the R-X impedance plane. Zone 1 (fast) is sized on transient reactance Xd'; Zone 2 (slow, all LOF conditions) is sized on synchronous reactance Xd.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="compact-form">
+          <div class="field"><label>Voltage, line-line (kV)</label><input id="lofV" type="number" value="20" step="0.1"></div>
+          <div class="field"><label>Rated power (MVA)</label><input id="lofMva" type="number" value="492" step="0.1"></div>
+          <div class="field"><label>PT ratio</label><input id="lofPT" type="number" value="167" step="1"></div>
+          <div class="field"><label>CT ratio</label><input id="lofCT" type="number" value="3600" step="1"></div>
+          <div class="field"><label>Xd (pu, synchronous reactance)</label><input id="lofXd" type="number" value="1.1888" step="0.001"></div>
+          <div class="field"><label>Xd' (pu, transient reactance)</label><input id="lofXdp" type="number" value="0.20577" step="0.001"></div>
+        </div>
+        <hr style="border-color:var(--border);margin:14px 0;">
+        <div class="field"><label>Zone 1 trip time (s)</label><input id="lofZ1t" type="number" value="0.1" step="0.01"></div>
+        <div class="field"><label>Zone 2 trip time (s)</label><input id="lofZ2t" type="number" value="0.5" step="0.01"></div>
+        <div class="results" id="lofResults"></div>
+      </div>
+      <div class="chart-wrap"><canvas id="lofCanvas"></canvas></div>
+    </div>
+    <div class="card" style="margin-top:16px;">
+      <p class="note" style="margin:0;">ZB = (V²/MVA) × (CT/PT). VNOM = V×1000/PT. INOM = (MVA×10<sup>6</sup>)/(√3×V×1000)/CT. Zone 1 diameter = ZB/(√3×Xd'), offset = &minus;Xd×ZB/2. Zone 2 diameter = Xd×ZB, offset = same as Zone 1. Both circles are centred on the negative reactance axis (offset mho into ‑jX), per standard generator loss-of-field protection practice. Verify against relay-specific setting conventions (e.g. SEL, GE) before commissioning.</p>
+    </div>
+  `;
+  ['lofV','lofMva','lofPT','lofCT','lofXd','lofXdp','lofZ1t','lofZ2t'].forEach(id => {
+    document.getElementById(id).addEventListener('input', calcLossOfField);
+  });
+  calcLossOfField();
+}
+function drawMhoCircles(zones){
+  const canvas = document.getElementById('lofCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const datasets = zones.map(z => {
+    const points = [];
+    for (let a = 0; a <= 360; a += 2){
+      const rad = a * Math.PI/180;
+      const x = z.centerR + z.radius*Math.cos(rad);
+      const y = z.centerX + z.radius*Math.sin(rad);
+      points.push({x, y});
+    }
+    return {
+      label: z.label,
+      data: points,
+      borderColor: z.color,
+      backgroundColor: 'transparent',
+      borderWidth: 2,
+      pointRadius: 0,
+      showLine: true,
+      fill: false,
+      parsing: false,
+    };
+  });
+  if (lofChart) lofChart.destroy();
+  lofChart = new Chart(ctx, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      parsing: false,
+      aspectRatio: 1,
+      scales: {
+        x: { type:'linear', title:{display:true,text:'R (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} },
+        y: { type:'linear', title:{display:true,text:'X (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} },
+      },
+      plugins: { legend: { labels: { color: '#e7ecf7' } } }
+    }
+  });
+}
+function calcLossOfField(){
+  const V = safeNum(document.getElementById('lofV').value, 20);
+  const MVA = safeNum(document.getElementById('lofMva').value, 492);
+  const PT = safeNum(document.getElementById('lofPT').value, 167);
+  const CT = safeNum(document.getElementById('lofCT').value, 3600);
+  const Xd = safeNum(document.getElementById('lofXd').value, 1.1888);
+  const Xdp = safeNum(document.getElementById('lofXdp').value, 0.20577);
+  const Z1t = safeNum(document.getElementById('lofZ1t').value, 0.1);
+  const Z2t = safeNum(document.getElementById('lofZ2t').value, 0.5);
+  const ZB = (V*V/MVA)*(CT/PT);
+  const VNOM = V*1000/PT;
+  const INOM = (MVA*1e6)/(Math.sqrt(3)*V*1000)/CT;
+  const Z1_diameter = ZB/(Math.sqrt(3)*Xdp);
+  const Z1_offset = -Xd*ZB/2;
+  const Z2_diameter = Xd*ZB;
+  const Z2_offset = Z1_offset;
+  const Z1_radius = Z1_diameter/2;
+  const Z2_radius = Z2_diameter/2;
+  const Z1_centerX = Z1_offset - Z1_radius;
+  const Z2_centerX = Z2_offset - Z2_radius;
+  document.getElementById('lofResults').innerHTML = `
+    <div class="result-line"><span>Base impedance ZB</span><b>${ZB.toFixed(3)} Ω</b></div>
+    <div class="result-line"><span>VNOM (secondary)</span><b>${VNOM.toFixed(2)} V</b></div>
+    <div class="result-line"><span>INOM (secondary)</span><b>${INOM.toFixed(3)} A</b></div>
+    <div class="result-line"><span>Zone 1 diameter</span><b>${Z1_diameter.toFixed(2)} Ω</b></div>
+    <div class="result-line"><span>Zone 1 offset</span><b>${Z1_offset.toFixed(2)} Ω</b></div>
+    <div class="result-line"><span>Zone 1 trip time</span><b>${Z1t} s</b></div>
+    <div class="result-line"><span>Zone 2 diameter</span><b>${Z2_diameter.toFixed(2)} Ω</b></div>
+    <div class="result-line"><span>Zone 2 offset</span><b>${Z2_offset.toFixed(2)} Ω</b></div>
+    <div class="result-line"><span>Zone 2 trip time</span><b>${Z2t} s</b></div>
+  `;
+  drawMhoCircles([
+    {label:`Zone 2 (Xd, ${Z2t}s)`, centerR:0, centerX:Z2_centerX, radius:Z2_radius, color:'#ffb74f'},
+    {label:`Zone 1 (Xd', ${Z1t}s)`, centerR:0, centerX:Z1_centerX, radius:Z1_radius, color:'#4fb0ff'},
+  ]);
+}
+
 function renderArcFlash(container){
   container.innerHTML = `
     <h2>Arc Flash Quick Reference <span class="std-badge">AS/NZS 4836 · IEC 61482 · IEC/TR 60909</span></h2>
@@ -330,7 +441,7 @@ function initApp(){
   const sideNav = document.getElementById('sideNav'); const app = document.getElementById('app'); const topbarTitle = document.getElementById('topbarTitle');
   sideNav.innerHTML = TOOL_GROUPS.map(g => `<div class="side-group"><div class="side-group-label">${g.label}</div>${g.tools.map(t => `<button type="button" class="side-link" data-tool="${t.id}">${t.label}</button>`).join('')}</div>`).join('');
   app.innerHTML = TOOLS.map(t => `<section class="tool-panel" id="panel-${t.id}"></section>`).join('');
-  const renderers = { tcc: renderTCC, symcomp: renderSymComp, ctsat: renderCTSat, diff87: renderDiff87, fault: renderFault, txfmr: renderTxfmr, arcflash: renderArcFlash, references: renderReferences };
+  const renderers = { tcc: renderTCC, symcomp: renderSymComp, ctsat: renderCTSat, diff87: renderDiff87, fault: renderFault, txfmr: renderTxfmr, lof: renderLossOfField, arcflash: renderArcFlash, references: renderReferences };
   function activate(id){
     document.querySelectorAll('.side-link').forEach(b => b.classList.toggle('active', b.dataset.tool===id));
     document.querySelectorAll('.tool-panel').forEach(p => p.classList.toggle('active', p.id===`panel-${id}`));
