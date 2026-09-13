@@ -1,6 +1,8 @@
-// ===================== v0.7.0 Enhancements v7 (additive, non-destructive) =====================
-// Fix: results box lands strictly in the right-hand card. Fix: unit select no longer
-// gets clipped/cut off. Adds Symmetrical Components side-by-side layout + dynamic labels.
+// ===================== v0.7.0 Enhancements v10 (additive, non-destructive) =====================
+// ROOT CAUSE FOUND (confirmed via actual rendered DOM): the unit <select> defaulted to its
+// SECOND option (kVA) instead of the intended first option (MVA) because opt.selected=true was
+// set during construction but not reflected once the select was inserted into the document.
+// Fix: explicitly set select.value = defaultUnit AFTER appending it to the DOM.
 (function () {
   function onReady(fn) {
     if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(fn, 0);
@@ -46,7 +48,8 @@
     if (cards.length < 2) return;
     var leftCard = cards[0];
     var rightCard = cards[1];
-    var resultsTable = rightCard.querySelector('table') || rightCard;
+    var resultsTable = rightCard.querySelector('table');
+    if (!resultsTable) return;
 
     var fields = leftCard.querySelectorAll('.field');
     var powerInput = null, vpInput = null, vsInput = null, zpcInput = null;
@@ -63,6 +66,8 @@
     });
     if (!powerInput || !vpInput || !vsInput) return;
     panel.dataset.v070Done = '1';
+
+    resultsTable.style.display = 'none';
 
     function makeInlineUnitToggle(field, input, units, defaultUnit) {
       var label = field.querySelector('label');
@@ -83,16 +88,15 @@
       select.style.minWidth = '72px';
       select.style.maxWidth = 'none';
       select.style.whiteSpace = 'nowrap';
-      select.style.textOverflow = 'clip';
       select.style.overflow = 'visible';
       units.forEach(function (u) {
         var opt = document.createElement('option');
         opt.value = u; opt.textContent = u;
-        if (u === defaultUnit) opt.selected = true;
         select.appendChild(opt);
       });
       row.appendChild(select);
-      input.dataset.v070Unit = defaultUnit;
+      select.value = defaultUnit;
+      input.dataset.v070Unit = select.value;
       select.addEventListener('change', function () {
         input.dataset.v070Unit = select.value;
         recompute();
@@ -127,7 +131,6 @@
 
     var resultBox = document.createElement('div');
     resultBox.className = 'results v070-result-box';
-    resultBox.style.marginTop = '12px';
     resultsTable.insertAdjacentElement('afterend', resultBox);
 
     function toMVA(val, unit) { return unit === 'kVA' ? val / 1000 : val; }
@@ -170,8 +173,6 @@
     ]);
   }
 
-
-  // ---- Symmetrical Components: side-by-side diagrams + dynamic Before/After labels ----
   function enhanceSymComp() {
     var panel = document.getElementById('panel-symcomp');
     if (!panel || panel.dataset.v070Done) return;
