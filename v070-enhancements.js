@@ -1,12 +1,29 @@
-// ===================== v0.7.0 Enhancements v10 (additive, non-destructive) =====================
-// ROOT CAUSE FOUND (confirmed via actual rendered DOM): the unit <select> defaulted to its
-// SECOND option (kVA) instead of the intended first option (MVA) because opt.selected=true was
-// set during construction but not reflected once the select was inserted into the document.
-// Fix: explicitly set select.value = defaultUnit AFTER appending it to the DOM.
+// ===================== v0.7.0 Enhancements v11 (additive, non-destructive) =====================
+// Adds scoped CSS so .v070-result-box rows have spacing, a divider between lines, and
+// clear left(label)/right(value) alignment - fixes cramped, hard-to-read results.
 (function () {
   function onReady(fn) {
     if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(fn, 0);
     else document.addEventListener('DOMContentLoaded', fn);
+  }
+
+  function injectResultLineStyles() {
+    if (document.getElementById('v070-style-fix')) return;
+    var style = document.createElement('style');
+    style.id = 'v070-style-fix';
+    style.textContent =
+      '.v070-result-box .result-line {' +
+      '  display: flex;' +
+      '  justify-content: space-between;' +
+      '  align-items: center;' +
+      '  gap: 12px;' +
+      '  padding: 8px 4px;' +
+      '  border-bottom: 1px solid rgba(159,176,207,0.15);' +
+      '}' +
+      '.v070-result-box .result-line:last-child { border-bottom: none; }' +
+      '.v070-result-box .result-line span { color: var(--text-dim); }' +
+      '.v070-result-box .result-line b { text-align: right; white-space: nowrap; }';
+    document.head.appendChild(style);
   }
 
   function renderKatexInto(el, tex, displayMode) {
@@ -248,6 +265,7 @@
   }
 
   function tryEnhanceAll() {
+    injectResultLineStyles();
     enhanceTransformerTool();
     enhanceSymComp();
     enhanceFaultLevelTool();
