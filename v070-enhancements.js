@@ -1,7 +1,9 @@
-// ===================== v0.7.0 Enhancements v15 (additive, non-destructive) =====================
-// - Result lines: label BOLD, value normal weight
-// - CT Saturation panel keeps the centered result-box treatment
-// - Fault Level panel REVERTED to formula-block only (no result box) per user feedback
+// ===================== v0.7.0 Enhancements v16 (additive, non-destructive) =====================
+// - Extends the bold-label / normal-value result styling to the native Fault Level panel
+//   result rows (3-phase fault, 1-phase fault), which are rendered by the app itself and
+//   were not previously covered by .v070-result-box styling.
+// - Normalizes text sizing on the Transformer tab so all result line labels/values share
+//   one consistent size (fixes "Transformer type" / "Three-Phase" size mismatch).
 (function () {
   function onReady(fn) {
     if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(fn, 0);
@@ -14,7 +16,9 @@
     var style = document.createElement('style');
     style.id = 'v070-style-fix';
     style.textContent =
-      '.v070-result-box .result-line {' +
+      '.v070-result-box .result-line,' +
+      '#panel-fault .results .result-line,' +
+      '#panel-fault .result-line {' +
       '  display: flex;' +
       '  flex-direction: row;' +
       '  align-items: baseline;' +
@@ -23,10 +27,29 @@
       '  gap: 6px;' +
       '  padding: 8px 4px;' +
       '  border-bottom: 1px solid rgba(159,176,207,0.15);' +
+      '  font-size: 1rem;' +
       '}' +
-      '.v070-result-box .result-line:last-child { border-bottom: none; }' +
-      '.v070-result-box .result-line span { font-weight: 600; }' +
-      '.v070-result-box .result-line b { font-weight: 400; color: var(--text-dim); font-size: 1.05rem; }';
+      '.v070-result-box .result-line:last-child,' +
+      '#panel-fault .results .result-line:last-child,' +
+      '#panel-fault .result-line:last-child { border-bottom: none; }' +
+      '.v070-result-box .result-line span,' +
+      '#panel-fault .results .result-line span,' +
+      '#panel-fault .result-line span,' +
+      '.v070-result-box .result-line label,' +
+      '#panel-fault .results .result-line label,' +
+      '#panel-fault .result-line label {' +
+      '  font-weight: 700;' +
+      '  font-size: 1rem;' +
+      '}' +
+      '.v070-result-box .result-line b,' +
+      '#panel-fault .results .result-line b,' +
+      '#panel-fault .result-line b,' +
+      '#panel-fault .results .result-line strong,' +
+      '#panel-fault .result-line strong {' +
+      '  font-weight: 400;' +
+      '  color: var(--text-dim);' +
+      '  font-size: 1rem;' +
+      '}';
     document.head.appendChild(style);
   }
 
@@ -219,7 +242,9 @@
   }
 
   function enhanceFaultLevelTool() {
-    // Reverted: no result-box injection here anymore. Formula block only, as before.
+    // No result-box injection (reverted per feedback). Just normalize the native
+    // 3-phase/1-phase fault result rows to bold-label/normal-value via CSS (see
+    // injectResultLineStyles), and keep the formula block.
     addFormulaBlock('panel-fault', 'Reference formulas', [
       String.raw`I''_{k,3\phi} = \dfrac{c \cdot V_n}{\sqrt{3}\,Z_1}`,
       String.raw`I''_{k,1\phi} = \dfrac{\sqrt{3}\,c \cdot V_n}{2Z_1 + Z_0}`
