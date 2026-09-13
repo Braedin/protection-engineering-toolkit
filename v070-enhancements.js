@@ -1,6 +1,6 @@
-// ===================== v0.7.0 Enhancements v3 (additive, non-destructive) =====================
-// Scoped strictly by panel id. Unit dropdowns inline with inputs. Transformer type
-// selector (3ph/1ph) at top of form; results pane shows both fault-current figures.
+// ===================== v0.7.0 Enhancements v7 (additive, non-destructive) =====================
+// Fix: results box lands strictly in the right-hand card. Fix: unit select no longer
+// gets clipped/cut off. Adds Symmetrical Components side-by-side layout + dynamic labels.
 (function () {
   function onReady(fn) {
     if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(fn, 0);
@@ -38,9 +38,17 @@
 
   function enhanceTransformerTool() {
     var panel = document.getElementById('panel-txfmr');
-    if (!panel || panel.querySelector('.v070-unit-toggle')) return;
+    if (!panel || panel.dataset.v070Done) return;
 
-    var fields = panel.querySelectorAll('.field');
+    var grid = panel.querySelector('.grid');
+    if (!grid) return;
+    var cards = grid.querySelectorAll(':scope > .card');
+    if (cards.length < 2) return;
+    var leftCard = cards[0];
+    var rightCard = cards[1];
+    var resultsTable = rightCard.querySelector('table') || rightCard;
+
+    var fields = leftCard.querySelectorAll('.field');
     var powerInput = null, vpInput = null, vsInput = null, zpcInput = null;
     var powerField = null, vpField = null, vsField = null;
     fields.forEach(function (field) {
@@ -54,18 +62,29 @@
       else if (/impedance|%z|zpc/.test(t) && !zpcInput) { zpcInput = input; }
     });
     if (!powerInput || !vpInput || !vsInput) return;
+    panel.dataset.v070Done = '1';
 
-    function makeInlineUnitToggle(field, input, units, defaultUnit, onChangeExtra) {
+    function makeInlineUnitToggle(field, input, units, defaultUnit) {
       var label = field.querySelector('label');
-      if (label) {
-        label.textContent = label.textContent.replace(/\s*\([^)]*\)\s*$/, '').trim();
-      }
+      if (label) label.textContent = label.textContent.replace(/\s*\([^)]*\)\s*$/, '').trim();
       var row = document.createElement('div');
-      row.className = 'row2';
+      row.className = 'row2 v070-unit-row';
+      row.style.display = 'flex';
+      row.style.gap = '6px';
+      row.style.alignItems = 'stretch';
       input.insertAdjacentElement('beforebegin', row);
       row.appendChild(input);
+      input.style.flex = '1 1 auto';
+      input.style.minWidth = '0';
       var select = document.createElement('select');
       select.className = 'v070-unit-toggle';
+      select.style.flex = '0 0 auto';
+      select.style.width = 'auto';
+      select.style.minWidth = '72px';
+      select.style.maxWidth = 'none';
+      select.style.whiteSpace = 'nowrap';
+      select.style.textOverflow = 'clip';
+      select.style.overflow = 'visible';
       units.forEach(function (u) {
         var opt = document.createElement('option');
         opt.value = u; opt.textContent = u;
@@ -76,7 +95,6 @@
       input.dataset.v070Unit = defaultUnit;
       select.addEventListener('change', function () {
         input.dataset.v070Unit = select.value;
-        if (onChangeExtra) onChangeExtra();
         recompute();
       });
       return select;
@@ -109,9 +127,8 @@
 
     var resultBox = document.createElement('div');
     resultBox.className = 'results v070-result-box';
-    var zpcField = zpcInput ? zpcInput.closest('.field') : null;
-    if (zpcField) zpcField.insertAdjacentElement('afterend', resultBox);
-    else powerField.closest('.card').appendChild(resultBox);
+    resultBox.style.marginTop = '12px';
+    resultsTable.insertAdjacentElement('afterend', resultBox);
 
     function toMVA(val, unit) { return unit === 'kVA' ? val / 1000 : val; }
     function toKV(val, unit) { return unit === 'V' ? val / 1000 : val; }
@@ -122,8 +139,11 @@
       var vpKv = toKV(safeNum(vpInput.value), vpInput.dataset.v070Unit || 'kV');
       var vsKv = toKV(safeNum(vsInput.value), vsInput.dataset.v070Unit || 'kV');
       var zpc = zpcInput ? safeNum(zpcInput.value) : 0;
+      var typeLabel = xfmrType === '1ph' ? 'Single-Phase' : 'Three-Phase';
       if (!mva || !vpKv || !vsKv || !zpc) {
-        resultBox.innerHTML = '<div class="note">Enter power, primary/secondary voltage and %Z to see the unit-aware result.</div>';
+        resultBox.innerHTML =
+          '<div class="result-line"><span>Transformer type</span><b>' + typeLabel + '</b></div>' +
+          '<div class="note">Enter power, primary/secondary voltage and %Z to complete this result.</div>';
         return;
       }
       var divisor = xfmrType === '1ph' ? 1 : Math.sqrt(3);
@@ -131,7 +151,6 @@
       var flcSecondary = (mva * 1e6) / (divisor * vsKv * 1e3);
       var faultPrimary = flcPrimary / (zpc / 100);
       var faultSecondary = flcSecondary / (zpc / 100);
-      var typeLabel = xfmrType === '1ph' ? 'Single-Phase' : 'Three-Phase';
       resultBox.innerHTML =
         '<div class="result-line"><span>Transformer type</span><b>' + typeLabel + '</b></div>' +
         '<div class="result-line"><span>Primary FLC</span><b>' + flcPrimary.toFixed(1) + ' A</b></div>' +
@@ -149,6 +168,56 @@
       String.raw`\text{FLC}_{3\phi} = \dfrac{S}{\sqrt{3}\,V_{LL}}, \quad \text{FLC}_{1\phi} = \dfrac{S}{V}`,
       String.raw`I''_k = \dfrac{\text{FLC}}{Z_{pu}}`
     ]);
+  }
+
+
+  // ---- Symmetrical Components: side-by-side diagrams + dynamic Before/After labels ----
+  function enhanceSymComp() {
+    var panel = document.getElementById('panel-symcomp');
+    if (!panel || panel.dataset.v070Done) return;
+
+    var beforeCanvas = document.getElementById('symBeforeCanvas');
+    var afterCanvas = document.getElementById('symAfterCanvas');
+    var dirSelect = document.getElementById('symDir');
+    if (!beforeCanvas || !afterCanvas || !dirSelect) return;
+    panel.dataset.v070Done = '1';
+
+    var rightCard = beforeCanvas.closest('.card');
+    if (!rightCard) return;
+
+    var beforeHeading = beforeCanvas.previousElementSibling;
+    var afterHeading = afterCanvas.previousElementSibling;
+
+    var row = document.createElement('div');
+    row.className = 'v070-symcomp-row';
+    row.style.display = 'grid';
+    row.style.gridTemplateColumns = '1fr 1fr';
+    row.style.gap = '16px';
+
+    var beforeCol = document.createElement('div');
+    var afterCol = document.createElement('div');
+
+    if (beforeHeading) beforeCol.appendChild(beforeHeading);
+    beforeCol.appendChild(beforeCanvas);
+    if (afterHeading) {
+      afterHeading.style.marginTop = '0';
+      afterCol.appendChild(afterHeading);
+    }
+    afterCol.appendChild(afterCanvas);
+
+    row.appendChild(beforeCol);
+    row.appendChild(afterCol);
+    rightCard.appendChild(row);
+
+    function updateLabels() {
+      var dir = dirSelect.value;
+      var beforeLabel = dir === 'p2s' ? 'Before (Phase)' : 'Before (Sequence)';
+      var afterLabel = dir === 'p2s' ? 'After (Sequence)' : 'After (Phase)';
+      if (beforeHeading) beforeHeading.textContent = beforeLabel;
+      if (afterHeading) afterHeading.textContent = afterLabel;
+    }
+    dirSelect.addEventListener('change', updateLabels);
+    updateLabels();
   }
 
   function enhanceFaultLevelTool() {
@@ -179,6 +248,7 @@
 
   function tryEnhanceAll() {
     enhanceTransformerTool();
+    enhanceSymComp();
     enhanceFaultLevelTool();
     enhanceCTTool();
     enhanceTCCTool();
