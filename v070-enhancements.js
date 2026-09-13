@@ -1,7 +1,7 @@
-// ===================== v0.7.0 Enhancements v14 (additive, non-destructive) =====================
-// - Result lines: label BOLD, value normal weight (swapped from v13)
-// - Fault Level and CT Saturation panels now get the same centered result-box treatment
-//   as the Transformer panel, instead of just formula blocks.
+// ===================== v0.7.0 Enhancements v15 (additive, non-destructive) =====================
+// - Result lines: label BOLD, value normal weight
+// - CT Saturation panel keeps the centered result-box treatment
+// - Fault Level panel REVERTED to formula-block only (no result box) per user feedback
 (function () {
   function onReady(fn) {
     if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(fn, 0);
@@ -219,49 +219,7 @@
   }
 
   function enhanceFaultLevelTool() {
-    var panel = document.getElementById('panel-fault');
-    if (!panel || panel.dataset.v070ResultDone) return;
-
-    var grid = panel.querySelector('.grid');
-    if (!grid) return;
-    var cards = grid.querySelectorAll(':scope > .card');
-    if (cards.length < 2) return;
-    var leftCard = cards[0];
-    var rightCard = cards[1];
-
-    var fields = leftCard.querySelectorAll('.field');
-    var vn = findFieldByLabel(fields, /voltage|kv|vn/);
-    var z1 = findFieldByLabel(fields, /positive|z1|impedance/);
-    var z0 = findFieldByLabel(fields, /zero|z0/);
-    var c = findFieldByLabel(fields, /voltage factor|^c\b/);
-    if (!vn || !z1) return;
-    panel.dataset.v070ResultDone = '1';
-
-    var resultBox = buildResultBox(rightCard, null);
-
-    function recompute() {
-      var vnKv = safeNum(vn.input.value);
-      var z1Ohm = safeNum(z1.input.value);
-      var z0Ohm = z0 ? safeNum(z0.input.value) : 0;
-      var cFactor = c ? (safeNum(c.input.value) || 1) : 1.1;
-      if (!vnKv || !z1Ohm) {
-        resultBox.innerHTML = '<div class="note">Enter system voltage and positive-sequence impedance to see fault levels.</div>';
-        return;
-      }
-      var i3ph = (cFactor * vnKv * 1000) / (Math.sqrt(3) * z1Ohm);
-      var lines = [lineHtml('Three-phase fault current', i3ph.toFixed(0) + ' A (' + (i3ph/1000).toFixed(2) + ' kA)')];
-      if (z0Ohm) {
-        var i1ph = (Math.sqrt(3) * cFactor * vnKv * 1000) / (2 * z1Ohm + z0Ohm);
-        lines.push(lineHtml('Single-phase fault current', i1ph.toFixed(0) + ' A (' + (i1ph/1000).toFixed(2) + ' kA)'));
-      }
-      resultBox.innerHTML = lines.join('');
-    }
-
-    [vn.input, z1.input, z0 && z0.input, c && c.input].forEach(function (inp) {
-      if (inp) { inp.addEventListener('input', recompute); inp.addEventListener('change', recompute); }
-    });
-    recompute();
-
+    // Reverted: no result-box injection here anymore. Formula block only, as before.
     addFormulaBlock('panel-fault', 'Reference formulas', [
       String.raw`I''_{k,3\phi} = \dfrac{c \cdot V_n}{\sqrt{3}\,Z_1}`,
       String.raw`I''_{k,1\phi} = \dfrac{\sqrt{3}\,c \cdot V_n}{2Z_1 + Z_0}`
