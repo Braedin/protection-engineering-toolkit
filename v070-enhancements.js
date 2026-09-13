@@ -1,6 +1,7 @@
-// ===================== v0.7.0 Enhancements v13 (additive, non-destructive) =====================
-// Results box: label and value on ONE line, centered as a block (not split left/right,
-// not stacked). e.g. "Primary FLC 87.5 A" - matches explicit feedback.
+// ===================== v0.7.0 Enhancements v14 (additive, non-destructive) =====================
+// - Result lines: label BOLD, value normal weight (swapped from v13)
+// - Fault Level and CT Saturation panels now get the same centered result-box treatment
+//   as the Transformer panel, instead of just formula blocks.
 (function () {
   function onReady(fn) {
     if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(fn, 0);
@@ -24,8 +25,8 @@
       '  border-bottom: 1px solid rgba(159,176,207,0.15);' +
       '}' +
       '.v070-result-box .result-line:last-child { border-bottom: none; }' +
-      '.v070-result-box .result-line span { color: var(--text-dim); }' +
-      '.v070-result-box .result-line b { font-size: 1.05rem; }';
+      '.v070-result-box .result-line span { font-weight: 600; }' +
+      '.v070-result-box .result-line b { font-weight: 400; color: var(--text-dim); font-size: 1.05rem; }';
     document.head.appendChild(style);
   }
 
@@ -56,6 +57,33 @@
       renderKatexInto(d, f, true);
     });
     panel.appendChild(block);
+  }
+
+  function findFieldByLabel(fields, regex) {
+    for (var i = 0; i < fields.length; i++) {
+      var label = fields[i].querySelector('label');
+      var input = fields[i].querySelector('input[type="number"], input:not([type]), select');
+      if (label && input && regex.test(label.textContent.toLowerCase())) {
+        return { field: fields[i], label: label, input: input };
+      }
+    }
+    return null;
+  }
+
+  function safeNum(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
+
+  function buildResultBox(rightCard, afterEl) {
+    var existingTable = rightCard.querySelector('table');
+    if (existingTable) existingTable.style.display = 'none';
+    var box = document.createElement('div');
+    box.className = 'results v070-result-box';
+    if (afterEl) afterEl.insertAdjacentElement('afterend', box);
+    else rightCard.appendChild(box);
+    return box;
+  }
+
+  function lineHtml(label, value) {
+    return '<div class="result-line"><span>' + label + '</span><b>' + value + '</b></div>';
   }
 
   function enhanceTransformerTool() {
@@ -149,13 +177,10 @@
       });
     });
 
-    var resultBox = document.createElement('div');
-    resultBox.className = 'results v070-result-box';
-    resultsTable.insertAdjacentElement('afterend', resultBox);
+    var resultBox = buildResultBox(rightCard, resultsTable);
 
     function toMVA(val, unit) { return unit === 'kVA' ? val / 1000 : val; }
     function toKV(val, unit) { return unit === 'V' ? val / 1000 : val; }
-    function safeNum(v) { var n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
     function recompute() {
       var mva = toMVA(safeNum(powerInput.value), powerInput.dataset.v070Unit || 'MVA');
@@ -165,7 +190,7 @@
       var typeLabel = xfmrType === '1ph' ? 'Single-Phase' : 'Three-Phase';
       if (!mva || !vpKv || !vsKv || !zpc) {
         resultBox.innerHTML =
-          '<div class="result-line"><span>Transformer type</span><b>' + typeLabel + '</b></div>' +
+          lineHtml('Transformer type', typeLabel) +
           '<div class="note">Enter power, primary/secondary voltage and %Z to complete this result.</div>';
         return;
       }
@@ -175,11 +200,11 @@
       var faultPrimary = flcPrimary / (zpc / 100);
       var faultSecondary = flcSecondary / (zpc / 100);
       resultBox.innerHTML =
-        '<div class="result-line"><span>Transformer type</span><b>' + typeLabel + '</b></div>' +
-        '<div class="result-line"><span>Primary FLC</span><b>' + flcPrimary.toFixed(1) + ' A</b></div>' +
-        '<div class="result-line"><span>Secondary FLC</span><b>' + flcSecondary.toFixed(1) + ' A</b></div>' +
-        '<div class="result-line"><span>Primary fault current</span><b>' + faultPrimary.toFixed(0) + ' A (' + (faultPrimary/1000).toFixed(2) + ' kA)</b></div>' +
-        '<div class="result-line"><span>Secondary fault current</span><b>' + faultSecondary.toFixed(0) + ' A (' + (faultSecondary/1000).toFixed(2) + ' kA)</b></div>';
+        lineHtml('Transformer type', typeLabel) +
+        lineHtml('Primary FLC', flcPrimary.toFixed(1) + ' A') +
+        lineHtml('Secondary FLC', flcSecondary.toFixed(1) + ' A') +
+        lineHtml('Primary fault current', faultPrimary.toFixed(0) + ' A (' + (faultPrimary/1000).toFixed(2) + ' kA)') +
+        lineHtml('Secondary fault current', faultSecondary.toFixed(0) + ' A (' + (faultSecondary/1000).toFixed(2) + ' kA)');
     }
 
     [powerInput, vpInput, vsInput, zpcInput].forEach(function (inp) {
@@ -190,6 +215,102 @@
     addFormulaBlock('panel-txfmr', 'Reference formulas', [
       String.raw`\text{FLC}_{3\phi} = \dfrac{S}{\sqrt{3}\,V_{LL}}, \quad \text{FLC}_{1\phi} = \dfrac{S}{V}`,
       String.raw`I''_k = \dfrac{\text{FLC}}{Z_{pu}}`
+    ]);
+  }
+
+  function enhanceFaultLevelTool() {
+    var panel = document.getElementById('panel-fault');
+    if (!panel || panel.dataset.v070ResultDone) return;
+
+    var grid = panel.querySelector('.grid');
+    if (!grid) return;
+    var cards = grid.querySelectorAll(':scope > .card');
+    if (cards.length < 2) return;
+    var leftCard = cards[0];
+    var rightCard = cards[1];
+
+    var fields = leftCard.querySelectorAll('.field');
+    var vn = findFieldByLabel(fields, /voltage|kv|vn/);
+    var z1 = findFieldByLabel(fields, /positive|z1|impedance/);
+    var z0 = findFieldByLabel(fields, /zero|z0/);
+    var c = findFieldByLabel(fields, /voltage factor|^c\b/);
+    if (!vn || !z1) return;
+    panel.dataset.v070ResultDone = '1';
+
+    var resultBox = buildResultBox(rightCard, null);
+
+    function recompute() {
+      var vnKv = safeNum(vn.input.value);
+      var z1Ohm = safeNum(z1.input.value);
+      var z0Ohm = z0 ? safeNum(z0.input.value) : 0;
+      var cFactor = c ? (safeNum(c.input.value) || 1) : 1.1;
+      if (!vnKv || !z1Ohm) {
+        resultBox.innerHTML = '<div class="note">Enter system voltage and positive-sequence impedance to see fault levels.</div>';
+        return;
+      }
+      var i3ph = (cFactor * vnKv * 1000) / (Math.sqrt(3) * z1Ohm);
+      var lines = [lineHtml('Three-phase fault current', i3ph.toFixed(0) + ' A (' + (i3ph/1000).toFixed(2) + ' kA)')];
+      if (z0Ohm) {
+        var i1ph = (Math.sqrt(3) * cFactor * vnKv * 1000) / (2 * z1Ohm + z0Ohm);
+        lines.push(lineHtml('Single-phase fault current', i1ph.toFixed(0) + ' A (' + (i1ph/1000).toFixed(2) + ' kA)'));
+      }
+      resultBox.innerHTML = lines.join('');
+    }
+
+    [vn.input, z1.input, z0 && z0.input, c && c.input].forEach(function (inp) {
+      if (inp) { inp.addEventListener('input', recompute); inp.addEventListener('change', recompute); }
+    });
+    recompute();
+
+    addFormulaBlock('panel-fault', 'Reference formulas', [
+      String.raw`I''_{k,3\phi} = \dfrac{c \cdot V_n}{\sqrt{3}\,Z_1}`,
+      String.raw`I''_{k,1\phi} = \dfrac{\sqrt{3}\,c \cdot V_n}{2Z_1 + Z_0}`
+    ]);
+  }
+
+  function enhanceCTTool() {
+    var panel = document.getElementById('panel-ctsat');
+    if (!panel || panel.dataset.v070ResultDone) return;
+
+    var grid = panel.querySelector('.grid');
+    if (!grid) return;
+    var cards = grid.querySelectorAll(':scope > .card');
+    if (cards.length < 2) return;
+    var leftCard = cards[0];
+    var rightCard = cards[1];
+
+    var fields = leftCard.querySelectorAll('.field');
+    var kFac = findFieldByLabel(fields, /dimensioning|k factor|^k\b/);
+    var iFault = findFieldByLabel(fields, /fault current|secondary fault/);
+    var rct = findFieldByLabel(fields, /r_?ct|ct resistance/);
+    var rl = findFieldByLabel(fields, /lead|r_?l\b/);
+    var rrelay = findFieldByLabel(fields, /relay/);
+    if (!kFac || !iFault) return;
+    panel.dataset.v070ResultDone = '1';
+
+    var resultBox = buildResultBox(rightCard, null);
+
+    function recompute() {
+      var k = safeNum(kFac.input.value);
+      var isec = safeNum(iFault.input.value);
+      var rCt = rct ? safeNum(rct.input.value) : 0;
+      var rLead = rl ? safeNum(rl.input.value) : 0;
+      var rRel = rrelay ? safeNum(rrelay.input.value) : 0;
+      if (!k || !isec) {
+        resultBox.innerHTML = '<div class="note">Enter dimensioning factor (K) and secondary fault current to see the required knee-point voltage.</div>';
+        return;
+      }
+      var vk = k * isec * (rCt + rLead + rRel);
+      resultBox.innerHTML = lineHtml('Required knee-point voltage', vk.toFixed(1) + ' V');
+    }
+
+    [kFac.input, iFault.input, rct && rct.input, rl && rl.input, rrelay && rrelay.input].forEach(function (inp) {
+      if (inp) { inp.addEventListener('input', recompute); inp.addEventListener('change', recompute); }
+    });
+    recompute();
+
+    addFormulaBlock('panel-ctsat', 'Reference formula', [
+      String.raw`V_k \geq K \times I_{fault,sec} \times (R_{CT} + R_L + R_{relay})`
     ]);
   }
 
@@ -239,19 +360,6 @@
     }
     dirSelect.addEventListener('change', updateLabels);
     updateLabels();
-  }
-
-  function enhanceFaultLevelTool() {
-    addFormulaBlock('panel-fault', 'Reference formulas', [
-      String.raw`I''_{k,3\phi} = \dfrac{c \cdot V_n}{\sqrt{3}\,Z_1}`,
-      String.raw`I''_{k,1\phi} = \dfrac{\sqrt{3}\,c \cdot V_n}{2Z_1 + Z_0}`
-    ]);
-  }
-
-  function enhanceCTTool() {
-    addFormulaBlock('panel-ctsat', 'Reference formula', [
-      String.raw`V_k \geq K \times I_{fault,sec} \times (R_{CT} + R_L + R_{relay})`
-    ]);
   }
 
   function enhanceTCCTool() {
