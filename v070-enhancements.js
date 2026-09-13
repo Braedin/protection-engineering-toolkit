@@ -1,9 +1,7 @@
-// ===================== v0.7.0 Enhancements v16 (additive, non-destructive) =====================
-// - Extends the bold-label / normal-value result styling to the native Fault Level panel
-//   result rows (3-phase fault, 1-phase fault), which are rendered by the app itself and
-//   were not previously covered by .v070-result-box styling.
-// - Normalizes text sizing on the Transformer tab so all result line labels/values share
-//   one consistent size (fixes "Transformer type" / "Three-Phase" size mismatch).
+// ===================== v0.7.0 Enhancements v18 (additive, non-destructive) =====================
+// - Fault Level panel now uses the SAME .v070-result-box treatment as CT Saturation:
+//   centered result lines, bold label / dim value, replacing the native output display.
+// - Keeps the Transformer type label/toggle font fix from v17.
 (function () {
   function onReady(fn) {
     if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(fn, 0);
@@ -16,9 +14,7 @@
     var style = document.createElement('style');
     style.id = 'v070-style-fix';
     style.textContent =
-      '.v070-result-box .result-line,' +
-      '#panel-fault .results .result-line,' +
-      '#panel-fault .result-line {' +
+      '.v070-result-box .result-line {' +
       '  display: flex;' +
       '  flex-direction: row;' +
       '  align-items: baseline;' +
@@ -29,26 +25,29 @@
       '  border-bottom: 1px solid rgba(159,176,207,0.15);' +
       '  font-size: 1rem;' +
       '}' +
-      '.v070-result-box .result-line:last-child,' +
-      '#panel-fault .results .result-line:last-child,' +
-      '#panel-fault .result-line:last-child { border-bottom: none; }' +
-      '.v070-result-box .result-line span,' +
-      '#panel-fault .results .result-line span,' +
-      '#panel-fault .result-line span,' +
-      '.v070-result-box .result-line label,' +
-      '#panel-fault .results .result-line label,' +
-      '#panel-fault .result-line label {' +
+      '.v070-result-box .result-line:last-child { border-bottom: none; }' +
+      '.v070-result-box .result-line span {' +
       '  font-weight: 700;' +
       '  font-size: 1rem;' +
       '}' +
-      '.v070-result-box .result-line b,' +
-      '#panel-fault .results .result-line b,' +
-      '#panel-fault .result-line b,' +
-      '#panel-fault .results .result-line strong,' +
-      '#panel-fault .result-line strong {' +
+      '.v070-result-box .result-line b {' +
       '  font-weight: 400;' +
       '  color: var(--text-dim);' +
       '  font-size: 1rem;' +
+      '}' +
+      '.v070-xfmr-type > label {' +
+      '  font-family: inherit;' +
+      '  font-size: 0.85rem;' +
+      '  font-weight: 600;' +
+      '  color: var(--text-dim);' +
+      '  text-transform: none;' +
+      '  display: block;' +
+      '  margin-bottom: 6px;' +
+      '}' +
+      '.v070-xfmr-type .v070-type-btn {' +
+      '  font-family: inherit;' +
+      '  font-size: 0.95rem;' +
+      '  font-weight: 500;' +
       '}';
     document.head.appendChild(style);
   }
@@ -98,6 +97,8 @@
   function buildResultBox(rightCard, afterEl) {
     var existingTable = rightCard.querySelector('table');
     if (existingTable) existingTable.style.display = 'none';
+    var existingResults = rightCard.querySelector('.results:not(.v070-result-box)');
+    if (existingResults) existingResults.style.display = 'none';
     var box = document.createElement('div');
     box.className = 'results v070-result-box';
     if (afterEl) afterEl.insertAdjacentElement('afterend', box);
@@ -242,9 +243,55 @@
   }
 
   function enhanceFaultLevelTool() {
-    // No result-box injection (reverted per feedback). Just normalize the native
-    // 3-phase/1-phase fault result rows to bold-label/normal-value via CSS (see
-    // injectResultLineStyles), and keep the formula block.
+    var panel = document.getElementById('panel-fault');
+    if (!panel || panel.dataset.v070ResultDone) return;
+
+    var grid = panel.querySelector('.grid');
+    if (!grid) return;
+    var cards = grid.querySelectorAll(':scope > .card');
+    if (cards.length < 2) return;
+    var leftCard = cards[0];
+    var rightCard = cards[1];
+
+    var fields = leftCard.querySelectorAll('.field');
+    var vn = findFieldByLabel(fields, /voltage|kv|vn/);
+    var z1 = findFieldByLabel(fields, /positive|z1|impedance/);
+    var z0 = findFieldByLabel(fields, /zero|z0/);
+    var c = findFieldByLabel(fields, /voltage factor|^c\b/);
+    if (!vn || !z1) {
+      addFormulaBlock('panel-fault', 'Reference formulas', [
+        String.raw`I''_{k,3\phi} = \dfrac{c \cdot V_n}{\sqrt{3}\,Z_1}`,
+        String.raw`I''_{k,1\phi} = \dfrac{\sqrt{3}\,c \cdot V_n}{2Z_1 + Z_0}`
+      ]);
+      return;
+    }
+    panel.dataset.v070ResultDone = '1';
+
+    var resultBox = buildResultBox(rightCard, null);
+
+    function recompute() {
+      var vnKv = safeNum(vn.input.value);
+      var z1Ohm = safeNum(z1.input.value);
+      var z0Ohm = z0 ? safeNum(z0.input.value) : 0;
+      var cFactor = c ? (safeNum(c.input.value) || 1) : 1.1;
+      if (!vnKv || !z1Ohm) {
+        resultBox.innerHTML = '<div class="note">Enter system voltage and positive-sequence impedance to see fault levels.</div>';
+        return;
+      }
+      var i3ph = (cFactor * vnKv * 1000) / (Math.sqrt(3) * z1Ohm);
+      var lines = [lineHtml('Three-phase fault current', i3ph.toFixed(0) + ' A (' + (i3ph/1000).toFixed(2) + ' kA)')];
+      if (z0Ohm) {
+        var i1ph = (Math.sqrt(3) * cFactor * vnKv * 1000) / (2 * z1Ohm + z0Ohm);
+        lines.push(lineHtml('Single-phase fault current', i1ph.toFixed(0) + ' A (' + (i1ph/1000).toFixed(2) + ' kA)'));
+      }
+      resultBox.innerHTML = lines.join('');
+    }
+
+    [vn.input, z1.input, z0 && z0.input, c && c.input].forEach(function (inp) {
+      if (inp) { inp.addEventListener('input', recompute); inp.addEventListener('change', recompute); }
+    });
+    recompute();
+
     addFormulaBlock('panel-fault', 'Reference formulas', [
       String.raw`I''_{k,3\phi} = \dfrac{c \cdot V_n}{\sqrt{3}\,Z_1}`,
       String.raw`I''_{k,1\phi} = \dfrac{\sqrt{3}\,c \cdot V_n}{2Z_1 + Z_0}`
