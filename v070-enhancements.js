@@ -1,6 +1,6 @@
-// ===================== v0.7.0 Enhancements v12 (additive, non-destructive) =====================
-// Results box content is now centered (label above value, both centered) instead of a
-// left-label/right-value split, per explicit feedback that left/right was hard to read.
+// ===================== v0.7.0 Enhancements v13 (additive, non-destructive) =====================
+// Results box: label and value on ONE line, centered as a block (not split left/right,
+// not stacked). e.g. "Primary FLC 87.5 A" - matches explicit feedback.
 (function () {
   function onReady(fn) {
     if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(fn, 0);
@@ -15,16 +15,16 @@
     style.textContent =
       '.v070-result-box .result-line {' +
       '  display: flex;' +
-      '  flex-direction: column;' +
-      '  align-items: center;' +
+      '  flex-direction: row;' +
+      '  align-items: baseline;' +
       '  justify-content: center;' +
       '  text-align: center;' +
-      '  gap: 4px;' +
-      '  padding: 10px 4px;' +
+      '  gap: 6px;' +
+      '  padding: 8px 4px;' +
       '  border-bottom: 1px solid rgba(159,176,207,0.15);' +
       '}' +
       '.v070-result-box .result-line:last-child { border-bottom: none; }' +
-      '.v070-result-box .result-line span { color: var(--text-dim); font-size: 0.85rem; }' +
+      '.v070-result-box .result-line span { color: var(--text-dim); }' +
       '.v070-result-box .result-line b { font-size: 1.05rem; }';
     document.head.appendChild(style);
   }
