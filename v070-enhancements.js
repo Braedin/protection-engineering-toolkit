@@ -1,6 +1,6 @@
-// ===================== v0.7.0 Enhancements v11 (additive, non-destructive) =====================
-// Adds scoped CSS so .v070-result-box rows have spacing, a divider between lines, and
-// clear left(label)/right(value) alignment - fixes cramped, hard-to-read results.
+// ===================== v0.7.0 Enhancements v12 (additive, non-destructive) =====================
+// Results box content is now centered (label above value, both centered) instead of a
+// left-label/right-value split, per explicit feedback that left/right was hard to read.
 (function () {
   function onReady(fn) {
     if (document.readyState === 'complete' || document.readyState === 'interactive') setTimeout(fn, 0);
@@ -8,21 +8,24 @@
   }
 
   function injectResultLineStyles() {
-    if (document.getElementById('v070-style-fix')) return;
+    var existing = document.getElementById('v070-style-fix');
+    if (existing) existing.remove();
     var style = document.createElement('style');
     style.id = 'v070-style-fix';
     style.textContent =
       '.v070-result-box .result-line {' +
       '  display: flex;' +
-      '  justify-content: space-between;' +
+      '  flex-direction: column;' +
       '  align-items: center;' +
-      '  gap: 12px;' +
-      '  padding: 8px 4px;' +
+      '  justify-content: center;' +
+      '  text-align: center;' +
+      '  gap: 4px;' +
+      '  padding: 10px 4px;' +
       '  border-bottom: 1px solid rgba(159,176,207,0.15);' +
       '}' +
       '.v070-result-box .result-line:last-child { border-bottom: none; }' +
-      '.v070-result-box .result-line span { color: var(--text-dim); }' +
-      '.v070-result-box .result-line b { text-align: right; white-space: nowrap; }';
+      '.v070-result-box .result-line span { color: var(--text-dim); font-size: 0.85rem; }' +
+      '.v070-result-box .result-line b { font-size: 1.05rem; }';
     document.head.appendChild(style);
   }
 
