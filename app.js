@@ -1,4 +1,3 @@
-
 // ===================== Protection Engineering Toolkit v0.6.0 =====================
 const TOOL_GROUPS = [
   { label: 'Overcurrent', tools: [ {id:'tcc', label:'TCC Plotter'} ] },
@@ -277,26 +276,20 @@ function renderTxfmr(container){
           <div class="field"><label>Impedance %Z</label><input id="tZpc" type="number" value="8" step="0.1"></div>
           <div class="field"><label>Primary kV</label><input id="tVp" type="number" value="66" step="0.1"></div>
           <div class="field"><label>Secondary kV</label><input id="tVs" type="number" value="11" step="0.1"></div>
-          <div class="field full"><label>Voltage factor c (IEC 60909)</label><select id="tC"><option value="1.1">c=1.1 (max fault)</option><option value="1.0">c=1.0 (nominal)</option><option value="0.95">c=0.95 (min fault)</option></select></div>
         </div>
-        <hr style="border-color:var(--border);margin:14px 0;">
-        <div class="checkrow"><input type="checkbox" id="tUseSource"><label for="tUseSource" style="margin:0;">Include upstream source fault level</label></div>
-        <div class="field"><label>Upstream source fault level (MVA)</label><input id="tSourceMva" type="number" value="500" step="1"></div>
       </div>
       <div class="card"><table class="ref-table" id="tResultsTable"></table></div>
     </div>
-    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">FLC = MVA×10<sup>6</sup> / (√3×kV×10<sup>3</sup>). Infinite-source fault current = FLC / (%Z/100). With a finite source, combine impedances in series: Z_total% = Z_source% + Z_xfmr%, where Z_source% = (MVA_xfmr / MVA_source) × 100.</p></div>
+    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">FLC = MVA×10<sup>6</sup> / (√3×kV×10<sup>3</sup>). Fault current = FLC / (%Z/100).</p></div>
   `;
-  ['tMva','tVp','tVs','tZpc','tC','tUseSource','tSourceMva'].forEach(id => { document.getElementById(id).addEventListener('input', calcTxfmr); document.getElementById(id).addEventListener('change', calcTxfmr); });
+  ['tMva','tVp','tVs','tZpc'].forEach(id => { document.getElementById(id).addEventListener('input', calcTxfmr); document.getElementById(id).addEventListener('change', calcTxfmr); });
   calcTxfmr();
 }
 function calcTxfmr(){
-  const mva = safeNum(document.getElementById('tMva').value, 10); const vp = safeNum(document.getElementById('tVp').value, 66); const vs = safeNum(document.getElementById('tVs').value, 11); const zpc = safeNum(document.getElementById('tZpc').value, 8); const c = safeNum(document.getElementById('tC').value, 1.1); const useSource = document.getElementById('tUseSource').checked; const sourceMva = safeNum(document.getElementById('tSourceMva').value, 500);
+  const mva = safeNum(document.getElementById('tMva').value, 10); const vp = safeNum(document.getElementById('tVp').value, 66); const vs = safeNum(document.getElementById('tVs').value, 11); const zpc = safeNum(document.getElementById('tZpc').value, 8);
   const flcPrimary = (mva*1e6) / (Math.sqrt(3)*vp*1e3); const flcSecondary = (mva*1e6) / (Math.sqrt(3)*vs*1e3);
-  const zSourcePctOnXfmrBase = useSource ? (mva/sourceMva)*100 : 0; const zTotalPct = zpc + zSourcePctOnXfmrBase;
-  const faultPrimary_infinite = flcPrimary / (zpc/100) * c; const faultSecondary_infinite = flcSecondary / (zpc/100) * c; const faultSecondary_withSource = flcSecondary / (zTotalPct/100) * c; const faultPrimary_withSource = flcPrimary / (zTotalPct/100) * c;
-  let rows = `<thead><tr><th>Quantity</th><th>Primary (${vp} kV)</th><th>Secondary (${vs} kV)</th></tr></thead><tbody><tr><td>Full-load current</td><td>${flcPrimary.toFixed(1)} A</td><td>${flcSecondary.toFixed(1)} A</td></tr><tr><td>Fault current (infinite source)</td><td>${faultPrimary_infinite.toFixed(0)} A (${(faultPrimary_infinite/1000).toFixed(2)} kA)</td><td>${faultSecondary_infinite.toFixed(0)} A (${(faultSecondary_infinite/1000).toFixed(2)} kA)</td></tr>`;
-  if (useSource){ rows += `<tr><td>Fault current (finite source, Z_total=${zTotalPct.toFixed(2)}%)</td><td>${faultPrimary_withSource.toFixed(0)} A (${(faultPrimary_withSource/1000).toFixed(2)} kA)</td><td>${faultSecondary_withSource.toFixed(0)} A (${(faultSecondary_withSource/1000).toFixed(2)} kA)</td></tr>`; }
+  const faultPrimary = flcPrimary / (zpc/100); const faultSecondary = flcSecondary / (zpc/100);
+  let rows = `<thead><tr><th>Quantity</th><th>Primary (${vp} kV)</th><th>Secondary (${vs} kV)</th></tr></thead><tbody><tr><td>Full-load current</td><td>${flcPrimary.toFixed(1)} A</td><td>${flcSecondary.toFixed(1)} A</td></tr><tr><td>Fault current</td><td>${faultPrimary.toFixed(0)} A (${(faultPrimary/1000).toFixed(2)} kA)</td><td>${faultSecondary.toFixed(0)} A (${(faultSecondary/1000).toFixed(2)} kA)</td></tr>`;
   rows += `</tbody>`; document.getElementById('tResultsTable').innerHTML = rows;
 }
 
