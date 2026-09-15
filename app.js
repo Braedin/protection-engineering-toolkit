@@ -405,10 +405,32 @@ function calcLossOfField(){
 
 // ===================== Distance Protection (Quad / Mho) Calculator =====================
 let distChart = null;
+if (typeof Chart !== 'undefined' && !Chart._dpLabelPluginRegistered) {
+  Chart.register({
+    id: 'dpLabelPlugin',
+    afterDatasetsDraw(chart){
+      const ctx = chart.ctx;
+      chart.data.datasets.forEach((ds, dsIndex) => {
+        if (!ds.showLabels) return;
+        const meta = chart.getDatasetMeta(dsIndex);
+        meta.data.forEach((point, idx) => {
+          const raw = ds.data[idx];
+          if (!raw) return;
+          ctx.save();
+          ctx.fillStyle = '#e7ecf7';
+          ctx.font = '10px Segoe UI';
+          ctx.fillText(`(${raw.x.toFixed(1)}, ${raw.y.toFixed(1)})`, point.x + 5, point.y - 5);
+          ctx.restore();
+        });
+      });
+    }
+  });
+  Chart._dpLabelPluginRegistered = true;
+}
 function renderDistProt(container){
   container.innerHTML = `
     <h2>Distance Protection Zone Plotter <span class="std-badge">ABB Quadrilateral / Mho, R-X Plane</span></h2>
-    <p class="tool-desc">Plot a distance protection zone characteristic (quadrilateral or mho) on the R-X impedance plane from relay reach settings, based on ABB REx630/REL670-style parameters (reach, directional load blinders, tilt angle). Supports Ph-Ph and Ph-E loops.</p>
+    <p class="tool-desc">Plot a distance protection zone characteristic (quadrilateral or mho) on the R-X impedance plane from relay reach settings, based on ABB REx630-style parameters. Ph-E reach is derived automatically from Ph-Ph reach and zero-sequence impedance, matching the relay setting sheet formula (2&times;Z1+Z0)/3.</p>
     <div class="grid">
       <div class="card">
         <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:8px;">Characteristic</label>
@@ -416,70 +438,99 @@ function renderDistProt(container){
         <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin:12px 0 8px;">Loop</label>
         <div class="fault-type-grid"><button class="dp-loop-btn active" data-loop="phph">Ph-Ph</button><button class="dp-loop-btn" data-loop="phe">Ph-E</button></div>
         <div class="compact-form" style="margin-top:12px;">
-          <div class="field"><label>R1 (Ω secondary)</label><input id="dpR1" type="number" value="12.86" step="0.01"></div>
-          <div class="field"><label>X1 (Ω secondary)</label><input id="dpX1" type="number" value="28.78" step="0.01"></div>
-          <div class="field" id="dpRbWrap"><label>Resistive blinder reach Rb (Ω)</label><input id="dpRb" type="number" value="7.77" step="0.01"></div>
-          <div class="field" id="dpRevWrap" style="display:none;"><label>Reverse reach (Ω, mho offset, 0=self-polarised)</label><input id="dpRev" type="number" value="0" step="0.01"></div>
+          <div class="field"><label>R1 Zone, Ph-Ph (&Omega;)</label><input id="dpR1" type="number" value="12.86" step="0.01"></div>
+          <div class="field"><label>X1 Zone, Ph-Ph (&Omega;)</label><input id="dpX1" type="number" value="28.78" step="0.01"></div>
+          <div class="field"><label>R0 Zone, zero-seq (&Omega;)</label><input id="dpR0" type="number" value="5" step="0.01"></div>
+          <div class="field"><label>X0 Zone, zero-seq (&Omega;)</label><input id="dpX0" type="number" value="65.5" step="0.01"></div>
+          <div class="field" id="dpRisWrap"><label>Min Ris Reach (&Omega;)</label><input id="dpMinRis" type="number" value="7.77" step="0.01"></div>
+          <div class="field" id="dpMaxRisWrap"><label>Max Ris Reach (&Omega;)</label><input id="dpMaxRis" type="number" value="7.77" step="0.01"></div>
+          <div class="field" id="dpRevWrap" style="display:none;"><label>Circle Radius override (&Omega;, mho, 0=auto)</label><input id="dpRev" type="number" value="0" step="0.01"></div>
           <div class="field"><label>Max Phase Angle (right blinder, deg)</label><input id="dpMaxAng" type="number" value="45" step="0.1" min="0" max="60"></div>
           <div class="field"><label>Min Phase Angle (left blinder, deg)</label><input id="dpMinAng" type="number" value="115" step="0.1" min="90" max="150"></div>
           <div class="field"><label>Tilt angle (deg, +ve increases area)</label><input id="dpTilt" type="number" value="0" step="0.1" min="-45" max="45"></div>
         </div>
         <div class="checkrow"><input type="checkbox" id="dpShowBlinders" checked><label for="dpShowBlinders" style="margin:0;">Show directional load blinders</label></div>
+        <div class="checkrow"><input type="checkbox" id="dpShowLabels" checked><label for="dpShowLabels" style="margin:0;">Show vertex coordinates</label></div>
         <div class="results" id="dpResults"></div>
       </div>
       <div class="chart-wrap"><canvas id="dpCanvas"></canvas></div>
     </div>
-    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">Quadrilateral: vertices at origin → (Rb, −Rb·tan(MaxAngle)) → (Rb, 0) → (Rb+R1, X1) → (X1/tan(MinAngle), X1) → origin, then rotated by the tilt angle. Mho: circle with diameter between the forward reach point R1∠(atan2(X1,R1)) and the reverse-reach point (0 for self-polarised), reproducing ABB's DSTPDIS quadrilateral/mho settings (Max/Min phase angle = right/left load-blinder angle, tilt angle increases zone area). Simplified for visualisation only — verify against the relay's technical/application manual before commissioning.</p></div>
+    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">Ph-E reach: R1_PhE = (2&times;R1_PhPh + R0)/3, X1_PhE = (2&times;X1_PhPh + X0)/3. Quadrilateral vertices: origin &rarr; (MinRisReach, &minus;MinRisReach&middot;tan(MaxAngle)) &rarr; (MinRisReach, 0) &rarr; (MaxRisReach+R1, X1) &rarr; (X1/tan(MinAngle), X1) &rarr; origin, rotated by the tilt angle. Mho: circle with diameter between forward reach R1&ang;(atan2(X1,R1)) and the reverse point (0 = self-polarised), or overridden directly by Circle Radius. Simplified for visualisation only &mdash; verify against the relay's technical/application manual before commissioning.</p></div>
   `;
-  document.querySelectorAll('.dp-type-btn').forEach(btn => { btn.onclick = () => { document.querySelectorAll('.dp-type-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); document.getElementById('dpRbWrap').style.display = btn.dataset.type==='quad' ? '' : 'none'; document.getElementById('dpRevWrap').style.display = btn.dataset.type==='mho' ? '' : 'none'; calcDistProt(); }; });
+  document.querySelectorAll('.dp-type-btn').forEach(btn => { btn.onclick = () => { document.querySelectorAll('.dp-type-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); const isQuad = btn.dataset.type==='quad'; document.getElementById('dpRisWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpMaxRisWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpRevWrap').style.display = isQuad ? 'none' : ''; calcDistProt(); }; });
   document.querySelectorAll('.dp-loop-btn').forEach(btn => { btn.onclick = () => { document.querySelectorAll('.dp-loop-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); calcDistProt(); }; });
-  ['dpR1','dpX1','dpRb','dpRev','dpMaxAng','dpMinAng','dpTilt','dpShowBlinders'].forEach(id => { document.getElementById(id).addEventListener('input', calcDistProt); document.getElementById(id).addEventListener('change', calcDistProt); });
+  ['dpR1','dpX1','dpR0','dpX0','dpMinRis','dpMaxRis','dpRev','dpMaxAng','dpMinAng','dpTilt','dpShowBlinders','dpShowLabels'].forEach(id => { document.getElementById(id).addEventListener('input', calcDistProt); document.getElementById(id).addEventListener('change', calcDistProt); });
   calcDistProt();
 }
 function dpRotate(pt, tiltRad){ return { x: pt.x*Math.cos(tiltRad) - pt.y*Math.sin(tiltRad), y: pt.x*Math.sin(tiltRad) + pt.y*Math.cos(tiltRad) }; }
 function calcDistProt(){
   const type = document.querySelector('.dp-type-btn.active').dataset.type;
   const loop = document.querySelector('.dp-loop-btn.active').dataset.loop;
-  const R1 = safeNum(document.getElementById('dpR1').value, 12.86);
-  const X1 = safeNum(document.getElementById('dpX1').value, 28.78);
-  const Rb = safeNum(document.getElementById('dpRb').value, 7.77);
+  const R1pp = safeNum(document.getElementById('dpR1').value, 12.86);
+  const X1pp = safeNum(document.getElementById('dpX1').value, 28.78);
+  const R0 = safeNum(document.getElementById('dpR0').value, 5);
+  const X0 = safeNum(document.getElementById('dpX0').value, 65.5);
+  const MinRis = safeNum(document.getElementById('dpMinRis').value, 7.77);
+  const MaxRis = safeNum(document.getElementById('dpMaxRis').value, 7.77);
   const Rev = safeNum(document.getElementById('dpRev').value, 0);
   const maxAngDeg = safeNum(document.getElementById('dpMaxAng').value, 45);
   const minAngDeg = safeNum(document.getElementById('dpMinAng').value, 115);
   const tiltDeg = safeNum(document.getElementById('dpTilt').value, 0);
   const showBlinders = document.getElementById('dpShowBlinders').checked;
+  const showLabels = document.getElementById('dpShowLabels').checked;
   const tiltRad = tiltDeg*Math.PI/180;
-  const lineAngleDeg = Math.atan2(X1, R1)*180/Math.PI;
   const maxAngRad = maxAngDeg*Math.PI/180, minAngRad = minAngDeg*Math.PI/180;
 
-  const datasets = [];
-  let resultsHtml = `<div class="result-line"><span>Line angle (atan2(X1,R1))</span><b>${lineAngleDeg.toFixed(2)}°</b></div>`;
+  const R1e = (2*R1pp + R0)/3;
+  const X1e = (2*X1pp + X0)/3;
+  const R1 = loop==='phph' ? R1pp : R1e;
+  const X1 = loop==='phph' ? X1pp : X1e;
+  const lineAngleDeg = Math.atan2(X1, R1)*180/Math.PI;
 
+  const datasets = [];
+  let resultsHtml = `<div class="result-line"><span>Ph-Ph line angle</span><b>${(Math.atan2(X1pp,R1pp)*180/Math.PI).toFixed(2)}°</b></div><div class="result-line"><span>Ph-E R1 / X1 (derived)</span><b>${R1e.toFixed(2)} / ${X1e.toFixed(2)} Ω</b></div><div class="result-line"><span>Ph-E line angle</span><b>${(Math.atan2(X1e,R1e)*180/Math.PI).toFixed(2)}°</b></div><div class="result-line"><span>Active loop line angle</span><b>${lineAngleDeg.toFixed(2)}°</b></div>`;
+
+  let boundsX = [0], boundsY = [0];
   if (type === 'quad'){
     const verts = [
       {x:0, y:0},
-      {x:Rb, y:-Rb*Math.tan(maxAngRad)},
-      {x:Rb, y:0},
-      {x:Rb+R1, y:X1},
+      {x:MinRis, y:-MinRis*Math.tan(maxAngRad)},
+      {x:MinRis, y:0},
+      {x:MaxRis+R1, y:X1},
       {x:X1/Math.tan(minAngRad), y:X1},
       {x:0, y:0},
     ].map(p => dpRotate(p, tiltRad));
-    datasets.push({ label:`${loop==='phph'?'Ph-Ph':'Ph-E'} Quadrilateral Zone`, data:verts, borderColor:'#4fb0ff', backgroundColor:'rgba(79,176,255,0.10)', fill:true, borderWidth:2, pointRadius:0, showLine:true, parsing:false });
-    resultsHtml += `<div class="result-line"><span>Vertex (right blinder base)</span><b>(${verts[1].x.toFixed(2)}, ${verts[1].y.toFixed(2)})</b></div><div class="result-line"><span>Vertex (top-right, Rb+R1, X1)</span><b>(${verts[3].x.toFixed(2)}, ${verts[3].y.toFixed(2)})</b></div><div class="result-line"><span>Vertex (top-left, load blinder)</span><b>(${verts[4].x.toFixed(2)}, ${verts[4].y.toFixed(2)})</b></div>`;
+    verts.forEach(v => { boundsX.push(v.x); boundsY.push(v.y); });
+    datasets.push({ label:`${loop==='phph'?'Ph-Ph':'Ph-E'} Quadrilateral Zone`, data:verts, borderColor:'#4fb0ff', backgroundColor:'rgba(79,176,255,0.10)', fill:true, borderWidth:2, pointRadius:3, pointBackgroundColor:'#4fb0ff', showLine:true, parsing:false, showLabels:showLabels });
+    resultsHtml += `<div class="result-line"><span>Vertex (right blinder base)</span><b>(${verts[1].x.toFixed(2)}, ${verts[1].y.toFixed(2)})</b></div><div class="result-line"><span>Vertex (top-right, Max+R1, X1)</span><b>(${verts[3].x.toFixed(2)}, ${verts[3].y.toFixed(2)})</b></div><div class="result-line"><span>Vertex (top-left, load blinder)</span><b>(${verts[4].x.toFixed(2)}, ${verts[4].y.toFixed(2)})</b></div>`;
   } else {
-    const fwd = dpRotate({x:R1, y:X1}, 0);
+    const fwd = {x:R1, y:X1};
     const revAngRad = Math.atan2(X1,R1) + Math.PI;
-    const revPt = {x:Rev*Math.cos(revAngRad), y:Rev*Math.sin(revAngRad)};
+    const revMag = Rev > 0 ? Rev : 0;
+    const revPt = {x:revMag*Math.cos(revAngRad), y:revMag*Math.sin(revAngRad)};
     const center = dpRotate({x:(fwd.x+revPt.x)/2, y:(fwd.y+revPt.y)/2}, tiltRad);
     const radius = Math.sqrt((fwd.x-revPt.x)**2 + (fwd.y-revPt.y)**2)/2;
     const circlePts = [];
-    for (let a=0; a<=360; a+=2){ const rad=a*Math.PI/180; circlePts.push({x:center.x+radius*Math.cos(rad), y:center.y+radius*Math.sin(rad)}); }
+    for (let a=0; a<=360; a+=4){ const rad=a*Math.PI/180; circlePts.push({x:center.x+radius*Math.cos(rad), y:center.y+radius*Math.sin(rad)}); }
     datasets.push({ label:`${loop==='phph'?'Ph-Ph':'Ph-E'} Mho Zone`, data:circlePts, borderColor:'#4fd88a', backgroundColor:'rgba(79,216,138,0.10)', fill:true, borderWidth:2, pointRadius:0, showLine:true, parsing:false });
+    const keyPts = [dpRotate(fwd,tiltRad), dpRotate(revPt,tiltRad)];
+    datasets.push({ label:'Mho key points', data:keyPts, borderColor:'#4fd88a', backgroundColor:'#4fd88a', pointRadius:4, showLine:false, type:'scatter', parsing:false, showLabels:showLabels });
+    boundsX.push(center.x-radius, center.x+radius); boundsY.push(center.y-radius, center.y+radius);
     resultsHtml += `<div class="result-line"><span>Circle centre</span><b>(${center.x.toFixed(2)}, ${center.y.toFixed(2)}) Ω</b></div><div class="result-line"><span>Circle radius (diameter/2)</span><b>${radius.toFixed(2)} Ω</b></div>`;
   }
 
+  const spanMaxX = Math.max(...boundsX.map(Math.abs), 1);
+  const spanMaxY = Math.max(...boundsY.map(Math.abs), 1);
+  const padX = Math.max(spanMaxX, spanMaxY) * 1.35;
+  const minX = Math.min(...boundsX) - padX*0.15, maxX = Math.max(...boundsX) + padX*0.15;
+  const minY = Math.min(...boundsY) - padX*0.15, maxY = Math.max(...boundsY) + padX*0.15;
+
+  datasets.push({ label:'R axis', data:[{x:minX,y:0},{x:maxX,y:0}], borderColor:'#2a3654', borderWidth:1, pointRadius:0, showLine:true, fill:false, parsing:false });
+  datasets.push({ label:'X axis', data:[{x:0,y:minY},{x:0,y:maxY}], borderColor:'#2a3654', borderWidth:1, pointRadius:0, showLine:true, fill:false, parsing:false });
+  datasets.push({ label:'Origin', data:[{x:0,y:0}], borderColor:'#e7ecf7', backgroundColor:'#e7ecf7', pointRadius:4, showLine:false, type:'scatter', parsing:false, showLabels:showLabels });
+
   if (showBlinders){
-    const spanLen = Math.max(R1, X1, Rb) * 1.6 + 5;
+    const spanLen = Math.max(spanMaxX, spanMaxY) * 1.3;
     const rightBlinder = [ dpRotate({x:0,y:0}, tiltRad), dpRotate({x:spanLen*Math.cos(-maxAngRad), y:spanLen*Math.sin(-maxAngRad)}, tiltRad) ];
     const leftBlinder = [ dpRotate({x:0,y:0}, tiltRad), dpRotate({x:spanLen*Math.cos(minAngRad), y:spanLen*Math.sin(minAngRad)}, tiltRad) ];
     datasets.push({ label:'Right load blinder (Max Phase Angle)', data:rightBlinder, borderColor:'#ffb74f', borderDash:[6,4], borderWidth:1.5, pointRadius:0, showLine:true, fill:false, parsing:false });
@@ -488,7 +539,7 @@ function calcDistProt(){
 
   const ctx = document.getElementById('dpCanvas');
   if (distChart) distChart.destroy();
-  distChart = new Chart(ctx, { type:'line', data:{datasets}, options:{ responsive:true, parsing:false, aspectRatio:1.1, scales:{ x:{type:'linear', title:{display:true,text:'R (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}}, y:{type:'linear', title:{display:true,text:'X (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}} }, plugins:{legend:{labels:{color:'#e7ecf7', font:{size:10}}}} } });
+  distChart = new Chart(ctx, { type:'line', data:{datasets}, options:{ responsive:true, parsing:false, aspectRatio:1.1, scales:{ x:{type:'linear', min:minX, max:maxX, title:{display:true,text:'R (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#1c2740'}}, y:{type:'linear', min:minY, max:maxY, title:{display:true,text:'X (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#1c2740'}} }, plugins:{legend:{labels:{color:'#e7ecf7', font:{size:10}, filter: (item) => !['R axis','X axis','Origin','Mho key points'].includes(item.text)}}} } });
   document.getElementById('dpResults').innerHTML = resultsHtml;
 }
 
