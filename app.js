@@ -4,6 +4,7 @@ const TOOL_GROUPS = [
   { label: 'System Analysis', tools: [ {id:'symcomp', label:'Symmetrical Components'}, {id:'fault', label:'Fault Level Calculator'} ] },
   { label: 'Transformers', tools: [ {id:'diff87', label:'Differential (87T)'}, {id:'txfmr', label:'FLC & Fault Current'} ] },
   { label: 'Generator Protection', tools: [ {id:'lof', label:'Loss of Field (40)'} ] },
+  { label: 'Line Protection', tools: [ {id:'distprot', label:'Distance Protection (Quad/Mho)'} ] },
   { label: 'CT / Instrument Transformers', tools: [ {id:'ctsat', label:'CT Knee-Point / Saturation'} ] },
   { label: 'Reference', tools: [ {id:'arcflash', label:'Arc Flash Reference'}, {id:'references', label:'Standards Library'} ] },
 ];
@@ -402,6 +403,95 @@ function calcLossOfField(){
   ]);
 }
 
+// ===================== Distance Protection (Quad / Mho) Calculator =====================
+let distChart = null;
+function renderDistProt(container){
+  container.innerHTML = `
+    <h2>Distance Protection Zone Plotter <span class="std-badge">ABB Quadrilateral / Mho, R-X Plane</span></h2>
+    <p class="tool-desc">Plot a distance protection zone characteristic (quadrilateral or mho) on the R-X impedance plane from relay reach settings, based on ABB REx630/REL670-style parameters (reach, directional load blinders, tilt angle). Supports Ph-Ph and Ph-E loops.</p>
+    <div class="grid">
+      <div class="card">
+        <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:8px;">Characteristic</label>
+        <div class="fault-type-grid"><button class="dp-type-btn active" data-type="quad">Quadrilateral</button><button class="dp-type-btn" data-type="mho">Mho (circular)</button></div>
+        <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin:12px 0 8px;">Loop</label>
+        <div class="fault-type-grid"><button class="dp-loop-btn active" data-loop="phph">Ph-Ph</button><button class="dp-loop-btn" data-loop="phe">Ph-E</button></div>
+        <div class="compact-form" style="margin-top:12px;">
+          <div class="field"><label>R1 (Ω secondary)</label><input id="dpR1" type="number" value="12.86" step="0.01"></div>
+          <div class="field"><label>X1 (Ω secondary)</label><input id="dpX1" type="number" value="28.78" step="0.01"></div>
+          <div class="field" id="dpRbWrap"><label>Resistive blinder reach Rb (Ω)</label><input id="dpRb" type="number" value="7.77" step="0.01"></div>
+          <div class="field" id="dpRevWrap" style="display:none;"><label>Reverse reach (Ω, mho offset, 0=self-polarised)</label><input id="dpRev" type="number" value="0" step="0.01"></div>
+          <div class="field"><label>Max Phase Angle (right blinder, deg)</label><input id="dpMaxAng" type="number" value="45" step="0.1" min="0" max="60"></div>
+          <div class="field"><label>Min Phase Angle (left blinder, deg)</label><input id="dpMinAng" type="number" value="115" step="0.1" min="90" max="150"></div>
+          <div class="field"><label>Tilt angle (deg, +ve increases area)</label><input id="dpTilt" type="number" value="0" step="0.1" min="-45" max="45"></div>
+        </div>
+        <div class="checkrow"><input type="checkbox" id="dpShowBlinders" checked><label for="dpShowBlinders" style="margin:0;">Show directional load blinders</label></div>
+        <div class="results" id="dpResults"></div>
+      </div>
+      <div class="chart-wrap"><canvas id="dpCanvas"></canvas></div>
+    </div>
+    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">Quadrilateral: vertices at origin → (Rb, −Rb·tan(MaxAngle)) → (Rb, 0) → (Rb+R1, X1) → (X1/tan(MinAngle), X1) → origin, then rotated by the tilt angle. Mho: circle with diameter between the forward reach point R1∠(atan2(X1,R1)) and the reverse-reach point (0 for self-polarised), reproducing ABB's DSTPDIS quadrilateral/mho settings (Max/Min phase angle = right/left load-blinder angle, tilt angle increases zone area). Simplified for visualisation only — verify against the relay's technical/application manual before commissioning.</p></div>
+  `;
+  document.querySelectorAll('.dp-type-btn').forEach(btn => { btn.onclick = () => { document.querySelectorAll('.dp-type-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); document.getElementById('dpRbWrap').style.display = btn.dataset.type==='quad' ? '' : 'none'; document.getElementById('dpRevWrap').style.display = btn.dataset.type==='mho' ? '' : 'none'; calcDistProt(); }; });
+  document.querySelectorAll('.dp-loop-btn').forEach(btn => { btn.onclick = () => { document.querySelectorAll('.dp-loop-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); calcDistProt(); }; });
+  ['dpR1','dpX1','dpRb','dpRev','dpMaxAng','dpMinAng','dpTilt','dpShowBlinders'].forEach(id => { document.getElementById(id).addEventListener('input', calcDistProt); document.getElementById(id).addEventListener('change', calcDistProt); });
+  calcDistProt();
+}
+function dpRotate(pt, tiltRad){ return { x: pt.x*Math.cos(tiltRad) - pt.y*Math.sin(tiltRad), y: pt.x*Math.sin(tiltRad) + pt.y*Math.cos(tiltRad) }; }
+function calcDistProt(){
+  const type = document.querySelector('.dp-type-btn.active').dataset.type;
+  const loop = document.querySelector('.dp-loop-btn.active').dataset.loop;
+  const R1 = safeNum(document.getElementById('dpR1').value, 12.86);
+  const X1 = safeNum(document.getElementById('dpX1').value, 28.78);
+  const Rb = safeNum(document.getElementById('dpRb').value, 7.77);
+  const Rev = safeNum(document.getElementById('dpRev').value, 0);
+  const maxAngDeg = safeNum(document.getElementById('dpMaxAng').value, 45);
+  const minAngDeg = safeNum(document.getElementById('dpMinAng').value, 115);
+  const tiltDeg = safeNum(document.getElementById('dpTilt').value, 0);
+  const showBlinders = document.getElementById('dpShowBlinders').checked;
+  const tiltRad = tiltDeg*Math.PI/180;
+  const lineAngleDeg = Math.atan2(X1, R1)*180/Math.PI;
+  const maxAngRad = maxAngDeg*Math.PI/180, minAngRad = minAngDeg*Math.PI/180;
+
+  const datasets = [];
+  let resultsHtml = `<div class="result-line"><span>Line angle (atan2(X1,R1))</span><b>${lineAngleDeg.toFixed(2)}°</b></div>`;
+
+  if (type === 'quad'){
+    const verts = [
+      {x:0, y:0},
+      {x:Rb, y:-Rb*Math.tan(maxAngRad)},
+      {x:Rb, y:0},
+      {x:Rb+R1, y:X1},
+      {x:X1/Math.tan(minAngRad), y:X1},
+      {x:0, y:0},
+    ].map(p => dpRotate(p, tiltRad));
+    datasets.push({ label:`${loop==='phph'?'Ph-Ph':'Ph-E'} Quadrilateral Zone`, data:verts, borderColor:'#4fb0ff', backgroundColor:'rgba(79,176,255,0.10)', fill:true, borderWidth:2, pointRadius:0, showLine:true, parsing:false });
+    resultsHtml += `<div class="result-line"><span>Vertex (right blinder base)</span><b>(${verts[1].x.toFixed(2)}, ${verts[1].y.toFixed(2)})</b></div><div class="result-line"><span>Vertex (top-right, Rb+R1, X1)</span><b>(${verts[3].x.toFixed(2)}, ${verts[3].y.toFixed(2)})</b></div><div class="result-line"><span>Vertex (top-left, load blinder)</span><b>(${verts[4].x.toFixed(2)}, ${verts[4].y.toFixed(2)})</b></div>`;
+  } else {
+    const fwd = dpRotate({x:R1, y:X1}, 0);
+    const revAngRad = Math.atan2(X1,R1) + Math.PI;
+    const revPt = {x:Rev*Math.cos(revAngRad), y:Rev*Math.sin(revAngRad)};
+    const center = dpRotate({x:(fwd.x+revPt.x)/2, y:(fwd.y+revPt.y)/2}, tiltRad);
+    const radius = Math.sqrt((fwd.x-revPt.x)**2 + (fwd.y-revPt.y)**2)/2;
+    const circlePts = [];
+    for (let a=0; a<=360; a+=2){ const rad=a*Math.PI/180; circlePts.push({x:center.x+radius*Math.cos(rad), y:center.y+radius*Math.sin(rad)}); }
+    datasets.push({ label:`${loop==='phph'?'Ph-Ph':'Ph-E'} Mho Zone`, data:circlePts, borderColor:'#4fd88a', backgroundColor:'rgba(79,216,138,0.10)', fill:true, borderWidth:2, pointRadius:0, showLine:true, parsing:false });
+    resultsHtml += `<div class="result-line"><span>Circle centre</span><b>(${center.x.toFixed(2)}, ${center.y.toFixed(2)}) Ω</b></div><div class="result-line"><span>Circle radius (diameter/2)</span><b>${radius.toFixed(2)} Ω</b></div>`;
+  }
+
+  if (showBlinders){
+    const spanLen = Math.max(R1, X1, Rb) * 1.6 + 5;
+    const rightBlinder = [ dpRotate({x:0,y:0}, tiltRad), dpRotate({x:spanLen*Math.cos(-maxAngRad), y:spanLen*Math.sin(-maxAngRad)}, tiltRad) ];
+    const leftBlinder = [ dpRotate({x:0,y:0}, tiltRad), dpRotate({x:spanLen*Math.cos(minAngRad), y:spanLen*Math.sin(minAngRad)}, tiltRad) ];
+    datasets.push({ label:'Right load blinder (Max Phase Angle)', data:rightBlinder, borderColor:'#ffb74f', borderDash:[6,4], borderWidth:1.5, pointRadius:0, showLine:true, fill:false, parsing:false });
+    datasets.push({ label:'Left load blinder (Min Phase Angle)', data:leftBlinder, borderColor:'#c792ea', borderDash:[6,4], borderWidth:1.5, pointRadius:0, showLine:true, fill:false, parsing:false });
+  }
+
+  const ctx = document.getElementById('dpCanvas');
+  if (distChart) distChart.destroy();
+  distChart = new Chart(ctx, { type:'line', data:{datasets}, options:{ responsive:true, parsing:false, aspectRatio:1.1, scales:{ x:{type:'linear', title:{display:true,text:'R (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}}, y:{type:'linear', title:{display:true,text:'X (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}} }, plugins:{legend:{labels:{color:'#e7ecf7', font:{size:10}}}} } });
+  document.getElementById('dpResults').innerHTML = resultsHtml;
+}
+
 function renderArcFlash(container){
   container.innerHTML = `
     <h2>Arc Flash Quick Reference <span class="std-badge">AS/NZS 4836 · IEC 61482 · IEC/TR 60909</span></h2>
@@ -434,7 +524,7 @@ function initApp(){
   const sideNav = document.getElementById('sideNav'); const app = document.getElementById('app'); const topbarTitle = document.getElementById('topbarTitle');
   sideNav.innerHTML = TOOL_GROUPS.map(g => `<div class="side-group"><div class="side-group-label">${g.label}</div>${g.tools.map(t => `<button type="button" class="side-link" data-tool="${t.id}">${t.label}</button>`).join('')}</div>`).join('');
   app.innerHTML = TOOLS.map(t => `<section class="tool-panel" id="panel-${t.id}"></section>`).join('');
-  const renderers = { tcc: renderTCC, symcomp: renderSymComp, ctsat: renderCTSat, diff87: renderDiff87, fault: renderFault, txfmr: renderTxfmr, lof: renderLossOfField, arcflash: renderArcFlash, references: renderReferences };
+  const renderers = { tcc: renderTCC, symcomp: renderSymComp, ctsat: renderCTSat, diff87: renderDiff87, fault: renderFault, txfmr: renderTxfmr, lof: renderLossOfField, distprot: renderDistProt, arcflash: renderArcFlash, references: renderReferences };
   function activate(id){
     document.querySelectorAll('.side-link').forEach(b => b.classList.toggle('active', b.dataset.tool===id));
     document.querySelectorAll('.tool-panel').forEach(p => p.classList.toggle('active', p.id===`panel-${id}`));
