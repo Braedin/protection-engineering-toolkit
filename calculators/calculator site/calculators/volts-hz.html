@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Volts per Hz overexcitation - Protection Toolkit</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-base="../">
+<main class="wrap" id="app"></main>
+<script src="../js/core.js"></script>
+<script src="../js/calcs/volts-hz.js"></script>
+<script>
+TK.mount({
+  id: 'volts-hz',
+  title: 'Volts / Hz overexcitation',
+  subtitle: 'Pickup V/Hz for each stage and the voltage to apply at each test frequency.',
+  source: 'Volts-Hz Overexcitation.xlsx',
+  inputs: [
+    { group: 'Nominal' },
+    { id: 'vnom', label: 'Nominal voltage at the relay', unit: 'V', value: 63.51, minExclusive: 0, hint: 'Use the same basis as the relay setting (L-N or L-L).' },
+    { id: 'fnom', label: 'Nominal frequency', unit: 'Hz', value: 50, minExclusive: 0 },
+    { group: 'Relay settings' },
+    { id: 'trip1', label: 'Trip setting 1', unit: 'pu', value: 1.18, minExclusive: 0 },
+    { id: 'trip2', label: 'Trip setting 2', unit: 'pu', value: 1.1, minExclusive: 0 },
+    { group: 'Test' },
+    { id: 'fset', label: 'Test frequency', unit: 'Hz', value: 48.48, minExclusive: 0 },
+    { id: 'freqList', label: 'Sweep frequencies', type: 'text', value: '45, 46, 47, 48, 48.48, 49, 50', hint: 'Comma separated. Optional table of voltages.' }
+  ],
+  calc: function (v) {
+    var r = TK.calcs.voltsHz.compute(v);
+    var out = {
+      warnings: r.warnings,
+      sections: [
+        { title: 'Pickup at the test frequency (' + v.fset + ' Hz)', rows: [
+          { label: 'Trip 1: voltage to apply', value: r.v1, unit: 'V', dp: 3, strong: true },
+          { label: 'Trip 2: voltage to apply', value: r.v2, unit: 'V', dp: 3, strong: true }
+        ] },
+        { title: 'V/Hz values', rows: [
+          { label: 'Nominal V/Hz', value: r.ratio, unit: 'V/Hz', dp: 4 },
+          { label: 'Trip 1 pickup', value: r.t1, unit: 'V/Hz', dp: 4 },
+          { label: 'Trip 2 pickup', value: r.t2, unit: 'V/Hz', dp: 4 }
+        ] }
+      ]
+    };
+    if (r.sweep.length) out.sections.push({ title: 'Voltage at each test frequency', table: {
+      head: ['Frequency (Hz)', 'Trip 1 (V)', '% nominal', 'Trip 2 (V)', '% nominal'], dp: [2, 3, 1, 3, 1],
+      rows: r.sweep.map(function (s) { return [s.f, s.v1, s.pct1, s.v2, s.pct2]; }) } });
+    return out;
+  },
+  formulas: [
+    { label: 'Nominal V/Hz', text: 'V nominal / f nominal' },
+    { label: 'Pickup V/Hz', text: 'setting (pu) x nominal V/Hz' },
+    { label: 'Voltage to apply', text: 'f test x pickup V/Hz' }
+  ],
+  notes: ['The original sheet labelled 63.51 V as "L-L", but it is a line-to-neutral value (110 V / sqrt3). Enter whichever basis matches the relay setting; the label here no longer assumes one.']
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Current imbalance - Protection Toolkit</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-base="../">
+<main class="wrap" id="app"></main>
+<script src="../js/core.js"></script>
+<script src="../js/calcs/current-imbalance.js"></script>
+<script>
+TK.mount({
+  id: 'current-imbalance',
+  title: 'Current imbalance',
+  subtitle: 'Phase current unbalance for motor protection, compared with the alarm and trip levels.',
+  source: 'Current Imbalance.xlsx',
+  inputs: [
+    { group: 'Measured phase currents (primary)' },
+    { id: 'ia', label: 'Ia', unit: 'A', value: 222.5, min: 0 },
+    { id: 'ib', label: 'Ib', unit: 'A', value: 168, min: 0 },
+    { id: 'ic', label: 'Ic', unit: 'A', value: 168, min: 0 },
+    { group: 'Motor and CT' },
+    { id: 'flc', label: 'Full load current (FLC)', unit: 'A', value: 140, minExclusive: 0 },
+    { id: 'ctPri', label: 'CT primary', unit: 'A', value: 250, minExclusive: 0 },
+    { id: 'ctSec', label: 'CT secondary', unit: 'A', value: 1, minExclusive: 0 },
+    { group: 'Relay settings' },
+    { id: 'alarmPct', label: 'Alarm level', unit: '%', value: 15, min: 0 },
+    { id: 'alarmTime', label: 'Alarm delay', unit: 's', value: 5, min: 0 },
+    { id: 'tripPct', label: 'Trip level', unit: '%', value: 20, min: 0 },
+    { id: 'tripTime', label: 'Trip delay', unit: 's', value: 10, min: 0 }
+  ],
+  presets: [
+    { name: 'Sheet example (Ia high)', values: { ia: 222.5, ib: 168, ic: 168, flc: 140, ctPri: 250, ctSec: 1, alarmPct: 15, alarmTime: 5, tripPct: 20, tripTime: 10 } },
+    { name: 'One low phase (Ic 100 A)', values: { ia: 140, ib: 140, ic: 100, flc: 140, ctPri: 250, ctSec: 1, alarmPct: 15, alarmTime: 5, tripPct: 20, tripTime: 10 } }
+  ],
+  calc: function (v) {
+    var r = TK.calcs.currentImbalance.compute(v);
+    var st = r.state === 'trip' ? ['fail', 'TRIP'] : r.state === 'alarm' ? ['warn', 'ALARM'] : ['pass', 'NORMAL'];
+    return {
+      warnings: r.warnings,
+      sections: [
+        { title: 'Unbalance', rows: [
+          { label: 'Applied unbalance', hint: 'Based on ' + r.basis, value: r.pct, unit: '%', dp: 2, strong: true, status: st[0], statusText: st[1] },
+          { label: 'Alarm / trip levels', value: v.alarmPct + '% for ' + v.alarmTime + ' s / ' + v.tripPct + '% for ' + v.tripTime + ' s' },
+          { label: 'Unbalance as % of FLC', value: r.pctFlc, unit: '%', dp: 2 },
+          { label: 'Unbalance as % of average current', value: r.pctIav, unit: '%', dp: 2 },
+          { label: 'Maximum deviation from average (Im)', value: r.im, unit: 'A', dp: 2 }
+        ] },
+        { title: 'Phase currents', table: {
+          head: ['', 'Primary (A)', 'Secondary (A)'],
+          dp: [0, 2, 4],
+          rows: [
+            ['Ia', v.ia, r.secondary[0]], ['Ib', v.ib, r.secondary[1]], ['Ic', v.ic, r.secondary[2]],
+            ['Average', r.iav, r.iav / r.ctr], ['FLC', v.flc, r.flcSecondary]
+          ] } },
+        { title: 'CT', rows: [{ label: 'CT ratio', value: r.ctr, unit: ': 1', dp: 1 }] }
+      ]
+    };
+  },
+  formulas: [
+    { label: 'Average', text: 'Iav = (Ia + Ib + Ic) / 3' },
+    { label: 'Max deviation', text: 'Im = max( |Imax - Iav| , |Imin - Iav| )' },
+    { label: 'Below FLC', text: '% unbalance = Im / FLC x 100' },
+    { label: 'At or above FLC', text: '% unbalance = Im / Iav x 100' }
+  ],
+  notes: [
+    'The rule of switching from FLC to average current at 100% load follows the "% Imbalance when &gt;100" note in the original sheet. Confirm it against your relay manual.',
+    'Changed from the spreadsheet: the deviation now takes the absolute value for every phase. The original could ignore a low phase, and the FLC (140 A) was typed into a formula.'
+  ]
+});
+</script>
+</body>
+</html>

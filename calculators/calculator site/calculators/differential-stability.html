@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Differential stability - Protection Toolkit</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-base="../">
+<main class="wrap" id="app"></main>
+<script src="../js/core.js"></script>
+<script src="../js/calcs/differential-stability.js"></script>
+<script>
+function cells(prefix, vals) {
+  return vals.map(function (v, i) { return { id: prefix + i, label: 'L' + (i + 1), value: v, min: 0 }; });
+}
+TK.mount({
+  id: 'differential-stability',
+  title: 'Differential stability check',
+  subtitle: 'Compare injected current with the relay readings on both windings.',
+  source: 'Diff Stability.xls',
+  inputs: [
+    { group: 'CT ratios (primary A per secondary A)' },
+    { id: 'ctrP', label: 'Winding 1 CT ratio', unit: ': 1', value: 500, minExclusive: 0 },
+    { id: 'ctrS', label: 'Winding 2 CT ratio', unit: ': 1', value: 1500, minExclusive: 0 },
+    { id: 'tol', label: 'Tolerance', unit: '%', value: 1.5, minExclusive: 0, hint: 'Pass when the reading is within this of the expected value.' },
+    { group: 'Test values' },
+    { type: 'grid', title: 'Winding 1 relay reading (primary A)', cols: ['L1', 'L2', 'L3'], rows: [{ label: 'Ip', cells: cells('rp', [687, 686.7, 685.7]) }] },
+    { type: 'grid', title: 'Winding 1 injected (secondary A)', cols: ['L1', 'L2', 'L3'], rows: [{ label: 'Inj', cells: cells('ip', [1.37, 1.37, 1.37]) }] },
+    { type: 'grid', title: 'Winding 2 relay reading (primary A)', cols: ['L1', 'L2', 'L3'], rows: [{ label: 'Is', cells: cells('rs', [2103.3, 2099.4, 2099.4]) }] },
+    { type: 'grid', title: 'Winding 2 injected (secondary A)', cols: ['L1', 'L2', 'L3'], rows: [{ label: 'Inj', cells: cells('is', [1.4, 1.4, 1.4]) }] }
+  ],
+  calc: function (v) {
+    var r = TK.calcs.differentialStability.compute({
+      ctrP: v.ctrP, ctrS: v.ctrS, tol: v.tol,
+      readP: [v.rp0, v.rp1, v.rp2], injP: [v.ip0, v.ip1, v.ip2],
+      readS: [v.rs0, v.rs1, v.rs2], injS: [v.is0, v.is1, v.is2]
+    });
+    function rows(side, list) {
+      return list.map(function (c, i) {
+        return [side + ' L' + (i + 1), c.injected, c.expected, c.reading, c.errPct, { v: c.pass ? 'PASS' : 'FAIL', status: c.pass ? 'pass' : 'fail' }];
+      });
+    }
+    return {
+      warnings: r.warnings,
+      sections: [
+        { title: 'Overall', rows: [{ label: 'Result', value: r.pass ? 'PASS' : 'FAIL', status: r.pass ? 'pass' : 'fail', strong: true }] },
+        { title: 'Per phase', table: {
+          head: ['Phase', 'Injected (A)', 'Expected', 'Reading', 'Error %', 'Result'], dp: [0, 3, 1, 1, 2, 0],
+          rows: rows('W1', r.primary).concat(rows('W2', r.secondary)) } }
+      ]
+    };
+  },
+  formulas: [
+    { label: 'Expected reading', text: 'injected secondary A x CT ratio' },
+    { label: 'Error', text: '(reading - expected) / expected x 100' }
+  ],
+  notes: ['Changed from the spreadsheet: one tolerance for every cell (it used 2% on one and 1.5% on the rest) and error is measured against the expected value rather than the reading.']
+});
+</script>
+</body>
+</html>
