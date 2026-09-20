@@ -2,6 +2,14 @@
 
 All notable changes to the Protection Engineering Toolkit are documented here.
 
+## [0.9.2] - 2026-09-20
+
+### Fixed
+- **SEL-787 Differential Pickup: HV-side Ph-E pickup was wrongly multiplied by the W1CTC factor.** Per four independent OMICRON ramp tests on a real SEL-787 scheme (15 MVA Dy11, wye-connected CTs both sides, LV star point grounded), the HV winding gets **no** CTC correction on its earth-fault pickup — it equals the plain HV Ph-Ph pickup. Only the LV side's Ph-E pickup is multiplied by its CTC factor (W2CTC). The W1CTC factor is still shown on the panel for reference, just no longer applied. Verified against the real test data: HV Ph-Ph/Ph-E = 0.236189, LV Ph-Ph = 0.251022, LV Ph-E = 0.434783 (all A, secondary), matching a 15 MVA / 11kV-3.45kV / 1000:1-3000:1 CT / O87P=0.3 / W1CTC=12 / W2CTC=11 test case exactly.
+
+### Removed
+- **SEL-787 Differential Curve** tool — redundant with the existing generic Differential (87T) dual-slope plotter.
+
 ## [0.9.1] - 2026-09-20
 
 ### Fixed

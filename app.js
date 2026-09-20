@@ -1,8 +1,8 @@
-// ===================== Protection Engineering Toolkit v0.9.1 =====================
+// ===================== Protection Engineering Toolkit v0.9.2 =====================
 const TOOL_GROUPS = [
   { label: 'Overcurrent', tools: [ {id:'tcc', label:'TCC Plotter'} ] },
   { label: 'System Analysis', tools: [ {id:'symcomp', label:'Symmetrical Components'}, {id:'fault', label:'Fault Level Calculator'} ] },
-  { label: 'Transformers', tools: [ {id:'diff87', label:'Differential (87T)'}, {id:'txfmr', label:'FLC & Fault Current'}, {id:'diffcurve787', label:'SEL-787 Differential Curve'}, {id:'diffpickup787', label:'SEL-787 Differential Pickup'}, {id:'diffstability', label:'Differential Stability Check'} ] },
+  { label: 'Transformers', tools: [ {id:'diff87', label:'Differential (87T)'}, {id:'txfmr', label:'FLC & Fault Current'}, {id:'diffpickup787', label:'SEL-787 Differential Pickup'}, {id:'diffstability', label:'Differential Stability Check'} ] },
   { label: 'Motor Protection', tools: [ {id:'currentimbalance', label:'Current Imbalance (46)'}, {id:'underpower', label:'Underpower (32)'} ] },
   { label: 'Generator Protection', tools: [ {id:'lof', label:'Loss of Field (40)'}, {id:'voltshz', label:'Volts/Hz Overexcitation (24)'} ] },
   { label: 'Line Protection', tools: [ {id:'distprot', label:'Distance Protection (Quad/Mho)'} ] },
@@ -870,59 +870,6 @@ function calcCurrentImbalance(){
   </tbody>`;
 }
 
-// ===================== SEL-787 Differential Curve =====================
-let diffCurve787Chart = null;
-function renderDiffCurve787(container){
-  container.innerHTML = `
-    <h2>SEL-787 Differential Curve <span class="std-badge">Dual-Slope, xTAP</span></h2>
-    <p class="tool-desc">Dual-slope operate/restraint characteristic for the SEL-787 transformer differential element, in multiples of TAP. Above U87P the element is unrestrained.</p>
-    <div class="grid">
-      <div class="card">
-        <div class="field"><label>O87P (minimum pickup, xTAP)</label><input id="dc7O87p" type="number" value="0.3" step="0.01"></div>
-        <div class="field"><label>U87P (unrestrained pickup, xTAP)</label><input id="dc7U87p" type="number" value="8" step="0.1"></div>
-        <div class="field"><label>IRS1 (slope 1 limit, xTAP)</label><input id="dc7Irs1" type="number" value="3" step="0.1"></div>
-        <div class="field"><label>SLP1 (%)</label><input id="dc7Slp1" type="number" value="25" step="1"></div>
-        <div class="field"><label>SLP2 (%)</label><input id="dc7Slp2" type="number" value="50" step="1"></div>
-        <div class="results" id="dc7Results"></div>
-      </div>
-      <div class="chart-wrap"><canvas id="dc7Canvas"></canvas></div>
-    </div>
-    <div class="card" style="margin-top:16px;"><table class="ref-table" id="dc7LineTable"></table></div>
-  `;
-  ['dc7O87p','dc7U87p','dc7Irs1','dc7Slp1','dc7Slp2'].forEach(id => { document.getElementById(id).addEventListener('input', calcDiffCurve787); });
-  calcDiffCurve787();
-  renderFormulaBlock(container, 'Reference formulas', [
-    String.raw`\text{Line 1: } y=O87P \quad \text{Line 2: } y=SLP1\cdot x \quad \text{Line 3: } y=SLP2\cdot(x-h)`,
-    String.raw`h = IRS1 - \dfrac{SLP1\cdot IRS1}{SLP2}`
-  ]);
-}
-function calcDiffCurve787(){
-  const o87p = safeNum(document.getElementById('dc7O87p').value, 0.3); const u87p = safeNum(document.getElementById('dc7U87p').value, 8);
-  const irs1 = safeNum(document.getElementById('dc7Irs1').value, 3); const slp1pct = safeNum(document.getElementById('dc7Slp1').value, 25); const slp2pct = safeNum(document.getElementById('dc7Slp2').value, 50);
-  const s1 = slp1pct/100, s2 = slp2pct/100;
-  const x1 = s1 > 0 ? o87p/s1 : 0; const yIrs = s1*irs1; const h = s2 > 0 ? irs1 - (s1*irs1)/s2 : irs1; const x3 = s2 > 0 ? u87p/s2 + h : irs1;
-  let warnHtml = '';
-  if (s2 < s1) warnHtml += `<div class="result-flag flag-warn">⚠ SLP2 is smaller than SLP1; the SEL-787 requires SLP2 ≥ SLP1.</div>`;
-  if (x1 >= irs1) warnHtml += `<div class="result-flag flag-warn">⚠ IRS1 is not beyond the Line 1 / Line 2 break (${x1.toFixed(3)}); Slope 1 is never reached.</div>`;
-  if (yIrs >= u87p) warnHtml += `<div class="result-flag flag-warn">⚠ The curve reaches U87P (${u87p}) before IRS1; check the settings.</div>`;
-  document.getElementById('dc7Results').innerHTML = `
-    <div class="result-line"><span>Line 1 to Line 2 break (restraint)</span><b>${x1.toFixed(3)} xTAP</b></div>
-    <div class="result-line"><span>Operate current at IRS1</span><b>${yIrs.toFixed(3)} xTAP</b></div>
-    <div class="result-line"><span>Line 3 x-intercept (h)</span><b>${h.toFixed(3)} xTAP</b></div>
-    <div class="result-line"><span>Line 3 reaches U87P at</span><b>${x3.toFixed(3)} xTAP</b></div>
-    ${warnHtml}
-  `;
-  const lines = [ {name:'Line 1', x1:0, y1:o87p, x2:x1, y2:o87p}, {name:'Line 2', x1:x1, y1:o87p, x2:irs1, y2:yIrs}, {name:'Line 3', x1:irs1, y1:yIrs, x2:x3, y2:u87p} ];
-  document.getElementById('dc7LineTable').innerHTML = `<thead><tr><th>Line</th><th>x from</th><th>x to</th><th>y from</th><th>y to</th></tr></thead><tbody>${lines.map(l=>`<tr><td>${l.name}</td><td>${l.x1.toFixed(3)}</td><td>${l.x2.toFixed(3)}</td><td>${l.y1.toFixed(3)}</td><td>${l.y2.toFixed(3)}</td></tr>`).join('')}</tbody>`;
-  const xEnd = Math.max(x3*1.15, x3+1);
-  const points = [{x:0,y:o87p},{x:x1,y:o87p},{x:irs1,y:yIrs},{x:x3,y:u87p},{x:xEnd,y:u87p}];
-  const ctx = document.getElementById('dc7Canvas'); if (diffCurve787Chart) diffCurve787Chart.destroy();
-  diffCurve787Chart = safeChart(ctx, { type:'line', data:{ datasets:[
-    {label:'Operate boundary', data:points, borderColor:'#4fb0ff', backgroundColor:'rgba(79,176,255,0.08)', fill:true, pointRadius:0, borderWidth:2, parsing:false},
-    {label:'Breakpoints', data:[{x:0,y:o87p},{x:x1,y:o87p},{x:irs1,y:yIrs},{x:x3,y:u87p}], borderColor:'#ffb74f', backgroundColor:'#ffb74f', pointRadius:5, showLine:false, type:'scatter', parsing:false}
-  ]}, options:{ responsive:true, parsing:false, scales:{ x:{type:'linear', min:0, title:{display:true,text:'Restraint current (xTAP)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}}, y:{type:'linear', min:0, title:{display:true,text:'Operate current (xTAP)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}} }, plugins:{legend:{labels:{color:'#e7ecf7'}}} } });
-}
-
 // ===================== SEL-787 Differential Pickup =====================
 function ctcFactor787(n){ if (n%2===1) return Math.sqrt(3); if ([2,4,8,10].includes(n)) return 3; if ([6,12].includes(n)) return 1.5; return NaN; }
 function renderDiffPickup787(container){
@@ -961,7 +908,8 @@ function renderDiffPickup787(container){
   ['dp7Mva','dp7O87p','dp7Vp','dp7Vs','dp7CtrHv','dp7CtrLv','dp7W1ctc','dp7W2ctc','dp7DIb','dp7DIc','dp7SIc'].forEach(id => { const el=document.getElementById(id); el.addEventListener('input', calcDiffPickup787); el.addEventListener('change', calcDiffPickup787); });
   calcDiffPickup787();
   renderFormulaBlock(container, 'Reference formulas', [
-    String.raw`I = \dfrac{\text{MVA}\times10^6}{\sqrt3\,V}, \quad \text{Ph-Ph pickup} = \dfrac{O87P\cdot I}{\text{CT ratio}}, \quad \text{Ph-E pickup} = \text{Ph-Ph}\times\text{mult(CTC)}`
+    String.raw`I = \dfrac{\text{MVA}\times10^6}{\sqrt3\,V}, \quad \text{Ph-Ph pickup} = \dfrac{O87P\cdot I}{\text{CT ratio}}`,
+    String.raw`\text{HV Ph-E} = \text{HV Ph-Ph (unchanged)}, \quad \text{LV Ph-E} = \text{LV Ph-Ph}\times\text{mult(W2CTC)}`
   ]);
 }
 function calcDiffPickup787(){
@@ -976,16 +924,22 @@ function calcDiffPickup787(){
   let warnHtml = '';
   if (isNaN(f1)) warnHtml += `<div class="result-flag flag-warn">⚠ W1CTC = ${w1ctc} has no 1-phase-to-earth multiplier in the lookup table.</div>`;
   if (isNaN(f2)) warnHtml += `<div class="result-flag flag-warn">⚠ W2CTC = ${w2ctc} has no 1-phase-to-earth multiplier in the lookup table.</div>`;
-  const hvLL = o87p*ip/ctrHv; const lvLL = o87p*is/ctrLv; const hvLE = hvLL*f1; const lvLE = lvLL*f2;
+  const hvLL = o87p*ip/ctrHv; const lvLL = o87p*is/ctrLv;
+  // HV Ph-E pickup is NOT multiplied by the W1CTC factor — confirmed against four independent
+  // OMICRON ramp tests on a real SEL-787 (Dy11, 15 MVA, wye CTs both sides): HV single-phase-to-ground
+  // tripped at essentially the same current as the HV balanced test (no L-E correction on HV). Only
+  // the LV side's earth-fault sensitivity actually changes, matching PU L-L x W2CTC factor exactly.
+  const hvLE = hvLL; const lvLE = lvLL*f2;
   const hvLLmA = hvLL*1000, lvLLmA = lvLL*1000;
   const deltaIa = hvLLmA*f1 + (dIb+dIc)/2; const starIa = lvLLmA*f2 + sIc;
   if (!(w1ctc===12 && w2ctc===11)) warnHtml += `<div class="result-flag flag-warn">⚠ The injection formulas were derived in the original sheet for W1CTC=12 and W2CTC=11. Verify before using other settings.</div>`;
   document.getElementById('dp7Results').innerHTML = `
     <div class="result-line"><span>HV winding rated current (Ip)</span><b>${ip.toFixed(2)} A</b></div>
     <div class="result-line"><span>LV winding rated current (Is)</span><b>${is.toFixed(2)} A</b></div>
-    <div class="result-line"><span>Ph-E multiplier, W1CTC</span><b>${isNaN(f1)?'—':f1.toFixed(4)}</b></div>
-    <div class="result-line"><span>Ph-E multiplier, W2CTC</span><b>${isNaN(f2)?'—':f2.toFixed(4)}</b></div>
+    <div class="result-line"><span>W1CTC factor (informational — not applied to HV Ph-E)</span><b>${isNaN(f1)?'—':f1.toFixed(4)}</b></div>
+    <div class="result-line"><span>W2CTC factor (applied to LV Ph-E)</span><b>${isNaN(f2)?'—':f2.toFixed(4)}</b></div>
     ${warnHtml}
+    <div class="note">HV Ph-E pickup equals the plain HV Ph-Ph pickup — confirmed against four independent OMICRON ramp tests on a real SEL-787 (15 MVA Dy11, wye-connected CTs both sides, LV star point grounded): HV single-phase-to-ground tripped at essentially the same current as the HV balanced test, while LV single-phase-to-ground tripped at the W2CTC-corrected value. The W1CTC factor is shown for reference only.</div>
   `;
   function sideTable(title, ll, le, llTol, leTol){
     return `<thead><tr><th colspan="5">${title}</th></tr><tr><th></th><th>Pickup (A)</th><th>Pickup (mA)</th><th>-5% (mA)</th><th>+5% (mA)</th></tr></thead><tbody>
@@ -1218,7 +1172,7 @@ function initApp(){
   const sideNav = document.getElementById('sideNav'); const app = document.getElementById('app'); const topbarTitle = document.getElementById('topbarTitle');
   sideNav.innerHTML = TOOL_GROUPS.map(g => `<div class="side-group"><div class="side-group-label">${g.label}</div>${g.tools.map(t => `<button type="button" class="side-link" data-tool="${t.id}">${t.label}</button>`).join('')}</div>`).join('');
   app.innerHTML = TOOLS.map(t => `<section class="tool-panel" id="panel-${t.id}"></section>`).join('');
-  const renderers = { tcc: renderTCC, symcomp: renderSymComp, ctsat: renderCTSat, diff87: renderDiff87, fault: renderFault, txfmr: renderTxfmr, diffcurve787: renderDiffCurve787, diffpickup787: renderDiffPickup787, diffstability: renderDiffStability, currentimbalance: renderCurrentImbalance, underpower: renderUnderpower, lof: renderLossOfField, voltshz: renderVoltsHz, distprot: renderDistProt, arcflash: renderArcFlash, references: renderReferences };
+  const renderers = { tcc: renderTCC, symcomp: renderSymComp, ctsat: renderCTSat, diff87: renderDiff87, fault: renderFault, txfmr: renderTxfmr, diffpickup787: renderDiffPickup787, diffstability: renderDiffStability, currentimbalance: renderCurrentImbalance, underpower: renderUnderpower, lof: renderLossOfField, voltshz: renderVoltsHz, distprot: renderDistProt, arcflash: renderArcFlash, references: renderReferences };
   function activate(id){
     document.querySelectorAll('.side-link').forEach(b => b.classList.toggle('active', b.dataset.tool===id));
     document.querySelectorAll('.tool-panel').forEach(p => p.classList.toggle('active', p.id===`panel-${id}`));
