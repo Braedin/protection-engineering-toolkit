@@ -2,6 +2,11 @@
 
 All notable changes to the Protection Engineering Toolkit are documented here.
 
+## [0.9.5] - 2026-09-20
+
+### Fixed
+- **SEL-787 Differential Pickup: the Ph-E column in the results tables showed a "pure single-phase-to-ground" value that doesn't exist in the actual reference spreadsheet.** The real sheet has no such figure — its only Ph-E value ("Ia Pickup @0° 1ph-E") already bakes in the entered return current on the other two phases. The tables now show that value directly (matching the source spreadsheet's own cells exactly: HV = 254.3 mA, LV = 334.8 mA for the default case), and the separate, now-redundant "Injection" section underneath the tables has been removed since it duplicated the same number under a different label.
+
 ## [0.9.4] - 2026-09-20
 
 ### Fixed

@@ -1,4 +1,4 @@
-// ===================== Protection Engineering Toolkit v0.9.4 =====================
+// ===================== Protection Engineering Toolkit v0.9.5 =====================
 const TOOL_GROUPS = [
   { label: 'Overcurrent', tools: [ {id:'tcc', label:'TCC Plotter'} ] },
   { label: 'System Analysis', tools: [ {id:'symcomp', label:'Symmetrical Components'}, {id:'fault', label:'Fault Level Calculator'} ] },
@@ -922,7 +922,6 @@ function renderDiffPickup787(container){
         <table class="ref-table" id="dp7LvTable"></table>
       </div>
     </div>
-    <div class="card" style="margin-top:16px;"><div class="results centered" id="dp7Injection"></div></div>
   `;
   ['dp7Mva','dp7O87p','dp7Vp','dp7Vs','dp7CtrHv','dp7CtrLv','dp7W1ctc','dp7W2ctc','dp7HvIb','dp7HvIc','dp7LvIb','dp7LvIc'].forEach(id => { const el=document.getElementById(id); el.addEventListener('input', calcDiffPickup787); el.addEventListener('change', calcDiffPickup787); });
   calcDiffPickup787();
@@ -944,14 +943,14 @@ function calcDiffPickup787(){
   const hvLL = o87p*ip/ctrHv; const lvLL = o87p*is/ctrLv;
   const hvLLmA = hvLL*1000, lvLLmA = lvLL*1000;
 
-  // Ph-E (pure single-phase-to-ground, other two phases = 0): I1 = a.IA/div = base -> IA = base.div/a.
-  // Ph-E is undefined (N/A) when a=0 (WnCTC = 3 or 9): the Phase-A element doesn't respond to IA at all.
-  const hvLE = m1.a !== 0 ? hvLL*m1.div/Math.abs(m1.a) : NaN;
-  const lvLE = m2.a !== 0 ? lvLL*m2.div/Math.abs(m2.a) : NaN;
-
-  // Injection test: IB, IC applied at 180 deg (i.e. as -hvIb, -hvIc), solve a.IA + b.(-hvIb) + c.(-hvIc) = base.div for IA.
-  const deltaIa = m1.a !== 0 ? (hvLLmA*m1.div + m1.b*hvIb + m1.c*hvIc)/m1.a : NaN;
-  const starIa = m2.a !== 0 ? (lvLLmA*m2.div + m2.b*lvIb + m2.c*lvIc)/m2.a : NaN;
+  // Ph-E pickup = the Ia Pickup @0deg 1ph-E test value: the Phase A current needed to trip the
+  // I1WnC element with the entered return current on the other two phases (applied at 180 deg,
+  // i.e. as -hvIb, -hvIc). This matches the source spreadsheet exactly -- there is no separate
+  // "pure single-phase" Ph-E figure in the real sheet, only this injection-based one.
+  // Solve a.IA + b.(-hvIb) + c.(-hvIc) = base.div for IA. Undefined (N/A) when a=0 (WnCTC = 3 or 9):
+  // the Phase-A element doesn't respond to IA at all for those codes.
+  const hvLE = m1.a !== 0 ? (hvLLmA*m1.div + m1.b*hvIb + m1.c*hvIc)/m1.a/1000 : NaN;
+  const lvLE = m2.a !== 0 ? (lvLLmA*m2.div + m2.b*lvIb + m2.c*lvIc)/m2.a/1000 : NaN;
 
   let warnHtml = '';
   if (m1.a === 0) warnHtml += `<div class="result-flag flag-warn">⚠ W1CTC = ${w1ctc}: the Phase-A element does not depend on IA at all for this code — a Phase-A-only injection can never trip it. Test via Ib or Ic instead, or use the general matrix directly.</div>`;
@@ -962,7 +961,7 @@ function calcDiffPickup787(){
     <div class="result-line"><span>W1CTC row-1 matrix (I1 = a·IA + b·IB + c·IC)</span><b>a=${m1.a}, b=${m1.b}, c=${m1.c}, div=${m1.div.toFixed(4)}</b></div>
     <div class="result-line"><span>W2CTC row-1 matrix (I1 = a·IA + b·IB + c·IC)</span><b>a=${m2.a}, b=${m2.b}, c=${m2.c}, div=${m2.div.toFixed(4)}</b></div>
     ${warnHtml}
-    <div class="note">Ph-E pickup values in the tables are for a <b>pure</b> single-phase-to-ground injection (other two phases at zero) — the more realistic representation of an actual earth fault. The Injection section further down instead computes the Phase A current needed to trip with a fixed return current on the other two phases (entered above, applied at 180°), a common bench-test convention that trips at a different current than the pure single-phase case. A negative injection result means the polarity needs to be reversed (inject at 180° instead of 0°) to reach trip.</div>
+    <div class="note">Ph-E pickup is the Phase A current needed to trip with the entered return current on the other two phases (applied at 180°, i.e. negated) — this matches the source spreadsheet's "Ia Pickup @0° 1ph-E" cell exactly. A negative value means the polarity needs to be reversed (inject at 180° instead of 0°) to reach trip.</div>
   `;
   function sideTable(title, ll, le, llTol, leTol){
     const leCell = isNaN(le) ? ['N/A','N/A','N/A','N/A'] : [le.toFixed(4), (le*1000).toFixed(1), ((le-leTol)*1000).toFixed(1), ((le+leTol)*1000).toFixed(1)];
@@ -971,14 +970,8 @@ function calcDiffPickup787(){
       <tr><td>Ph-E</td><td>${leCell[0]}</td><td>${leCell[1]}</td><td>${leCell[2]}</td><td>${leCell[3]}</td></tr>
     </tbody>`;
   }
-  document.getElementById('dp7HvTable').innerHTML = sideTable('HV side pickup (secondary)', hvLL, hvLE, hvLL*0.05, isNaN(hvLE)?0:hvLE*0.05);
-  document.getElementById('dp7LvTable').innerHTML = sideTable('LV side pickup (secondary)', lvLL, lvLE, lvLL*0.05, isNaN(lvLE)?0:lvLE*0.05);
-  document.getElementById('dp7Injection').innerHTML = `
-    <div class="result-line"><span>HV side: Ph-Ph pickup</span><b>${hvLLmA.toFixed(1)} mA</b></div>
-    <div class="result-line"><span>HV side: Ia pickup (inject at 0°)</span><b>${isNaN(deltaIa)?'N/A':deltaIa.toFixed(1)+' mA'}</b></div>
-    <div class="result-line"><span>LV side: Ph-Ph pickup</span><b>${lvLLmA.toFixed(1)} mA</b></div>
-    <div class="result-line"><span>LV side: Ia pickup (inject at 0°)</span><b>${isNaN(starIa)?'N/A':starIa.toFixed(1)+' mA'}</b></div>
-  `;
+  document.getElementById('dp7HvTable').innerHTML = sideTable('HV side pickup (secondary)', hvLL, hvLE, hvLL*0.05, isNaN(hvLE)?0:Math.abs(hvLE)*0.05);
+  document.getElementById('dp7LvTable').innerHTML = sideTable('LV side pickup (secondary)', lvLL, lvLE, lvLL*0.05, isNaN(lvLE)?0:Math.abs(lvLE)*0.05);
 }
 
 // ===================== Differential Stability Check =====================
