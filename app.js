@@ -1,9 +1,10 @@
-// ===================== Protection Engineering Toolkit v0.8.0 =====================
+// ===================== Protection Engineering Toolkit v0.9.0 =====================
 const TOOL_GROUPS = [
   { label: 'Overcurrent', tools: [ {id:'tcc', label:'TCC Plotter'} ] },
   { label: 'System Analysis', tools: [ {id:'symcomp', label:'Symmetrical Components'}, {id:'fault', label:'Fault Level Calculator'} ] },
-  { label: 'Transformers', tools: [ {id:'diff87', label:'Differential (87T)'}, {id:'txfmr', label:'FLC & Fault Current'} ] },
-  { label: 'Generator Protection', tools: [ {id:'lof', label:'Loss of Field (40)'} ] },
+  { label: 'Transformers', tools: [ {id:'diff87', label:'Differential (87T)'}, {id:'txfmr', label:'FLC & Fault Current'}, {id:'diffcurve787', label:'SEL-787 Differential Curve'}, {id:'diffpickup787', label:'SEL-787 Differential Pickup'}, {id:'diffstability', label:'Differential Stability Check'} ] },
+  { label: 'Motor Protection', tools: [ {id:'currentimbalance', label:'Current Imbalance (46)'}, {id:'underpower', label:'Underpower (32)'} ] },
+  { label: 'Generator Protection', tools: [ {id:'lof', label:'Loss of Field (40)'}, {id:'voltshz', label:'Volts/Hz Overexcitation (24)'} ] },
   { label: 'Line Protection', tools: [ {id:'distprot', label:'Distance Protection (Quad/Mho)'} ] },
   { label: 'CT / Instrument Transformers', tools: [ {id:'ctsat', label:'CT Knee-Point / Saturation'} ] },
   { label: 'Reference', tools: [ {id:'arcflash', label:'Arc Flash Reference'}, {id:'references', label:'Standards Library'} ] },
@@ -505,12 +506,17 @@ function calcTxfmr(){
 
 // ===================== Loss of Field (40) Mho Setting Calculator =====================
 let lofChart = null;
+const LOF_PRESETS = {
+  '492': { label: '492 MVA unit (calculated)', values: { lofMode:'calc', lofV:'20', lofMva:'492', lofPT:'167', lofCT:'3600', lofXd:'1.1888', lofXdp:'0.20577', lofZ1t:'0.1', lofZ2t:'0.5' } },
+  '158': { label: "15.8 MVA test settings (manual)", values: { lofMode:'manual', lofV:'11', lofMva:'15.829', lofPT:'167', lofCT:'3600', lofXd:'1.18', lofXdp:'0.2', lofZ1d:'114.7', lofZ1o:'-12.6', lofZ2d:'149.1', lofZ2o:'-12.6', lofZ1t:'0.5', lofZ2t:'3' } },
+};
 function renderLossOfField(container){
   container.innerHTML = `
     <h2>Loss of Field (40) Mho Setting Calculator <span class="std-badge">Dual Mho, R-X Plane</span></h2>
     <p class="tool-desc">Calculate dual-zone offset mho loss-of-field settings from generator nameplate data, and visualise the characteristic on the R-X impedance plane. Zone 1 (fast) is sized on transient reactance Xd'; Zone 2 (slow, all LOF conditions) is sized on synchronous reactance Xd.</p>
     <div class="grid">
       <div class="card">
+        <div class="field"><label>Load example</label><select id="lofPreset"><option value="">— pick a preset —</option>${Object.entries(LOF_PRESETS).map(([k,p]) => `<option value="${k}">${p.label}</option>`).join('')}</select></div>
         <div class="compact-form">
           <div class="field"><label>Voltage, line-line (kV)</label><input id="lofV" type="number" value="20" step="0.1"></div>
           <div class="field"><label>Rated power (MVA)</label><input id="lofMva" type="number" value="492" step="0.1"></div>
@@ -520,18 +526,41 @@ function renderLossOfField(container){
           <div class="field"><label>Xd' (pu, transient reactance)</label><input id="lofXdp" type="number" value="0.20577" step="0.001"></div>
         </div>
         <hr style="border-color:var(--border);margin:14px 0;">
+        <div class="field"><label>Zone sizes</label><div class="fault-type-grid" data-savegroup="lofMode"><button class="fault-type-btn active" data-value="calc">Calculate from Xd, Xd'</button><button class="fault-type-btn" data-value="manual">Enter diameter/offset</button></div></div>
+        <div class="compact-form" id="lofManualWrap" style="display:none;margin-top:10px;">
+          <div class="field"><label>Zone 1 diameter (Ω sec)</label><input id="lofZ1d" type="number" value="17.53" step="0.01"></div>
+          <div class="field"><label>Zone 1 offset (Ω sec)</label><input id="lofZ1o" type="number" value="-1.8" step="0.01"></div>
+          <div class="field"><label>Zone 2 diameter (Ω sec)</label><input id="lofZ2d" type="number" value="20.83" step="0.01"></div>
+          <div class="field"><label>Zone 2 offset (Ω sec)</label><input id="lofZ2o" type="number" value="-1.8" step="0.01"></div>
+        </div>
+        <hr style="border-color:var(--border);margin:14px 0;">
         <div class="field"><label>Zone 1 trip time (s)</label><input id="lofZ1t" type="number" value="0.1" step="0.01"></div>
         <div class="field"><label>Zone 2 trip time (s)</label><input id="lofZ2t" type="number" value="0.5" step="0.01"></div>
         <div class="results" id="lofResults"></div>
       </div>
-      <div class="chart-wrap"><canvas id="lofCanvas"></canvas></div>
+      <div class="chart-wrap"><canvas id="lofCanvas"></canvas><table class="ref-table" id="lofOmicronTable" style="margin-top:16px;"></table></div>
     </div>
     <div class="card" style="margin-top:16px;">
-      <p class="note" style="margin:0;">ZB = (V²/MVA) × (CT/PT). VNOM = V×1000/PT. INOM = (MVA×10<sup>6</sup>)/(√3×V×1000)/CT. Zone 1 diameter = ZB/(√3×Xd'), offset = &minus;Xd×ZB/2. Zone 2 diameter = Xd×ZB, offset = same as Zone 1. Both circles are centred on the negative reactance axis (offset mho into ‑jX), per standard generator loss-of-field protection practice. Verify against relay-specific setting conventions (e.g. SEL, GE) before commissioning.</p>
+      <p class="note" style="margin:0;">ZB = (V²/MVA) × (CT/PT). VNOM = V×1000/PT. INOM = (MVA×10<sup>6</sup>)/(√3×V×1000)/CT. Zone 1 diameter = 1.0 pu (= ZB), offset = &minus;Xd'×ZB/2. Zone 2 diameter = Xd×ZB, offset = same as Zone 1. Both circles are centred on the negative reactance axis (offset mho into ‑jX), per standard generator loss-of-field protection practice. Omicron |Z|/Phi: circle centre = offset − diameter/2; |Z| = |centre|; Phi = 270° if the centre is below the R axis (offset mho, the normal case), else 90°. Verify against relay-specific setting conventions (e.g. SEL, GE) before commissioning.</p>
     </div>
   `;
-  ['lofV','lofMva','lofPT','lofCT','lofXd','lofXdp','lofZ1t','lofZ2t'].forEach(id => { document.getElementById(id).addEventListener('input', calcLossOfField); });
+  document.getElementById('lofPreset').addEventListener('change', (e) => {
+    const key = e.target.value; if (!key) return;
+    const vals = LOF_PRESETS[key].values;
+    Object.entries(vals).forEach(([id,val]) => {
+      if (id === 'lofMode'){ document.querySelector(`[data-savegroup="lofMode"] [data-value="${val}"]`).click(); return; }
+      const el = document.getElementById(id); if (el) el.value = val;
+    });
+    e.target.value = '';
+    calcLossOfField();
+  });
+  container.querySelectorAll('[data-savegroup="lofMode"] .fault-type-btn').forEach(btn => { btn.onclick = () => { container.querySelectorAll('[data-savegroup="lofMode"] .fault-type-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); document.getElementById('lofManualWrap').style.display = btn.dataset.value==='manual' ? '' : 'none'; calcLossOfField(); }; });
+  ['lofV','lofMva','lofPT','lofCT','lofXd','lofXdp','lofZ1d','lofZ1o','lofZ2d','lofZ2o','lofZ1t','lofZ2t'].forEach(id => { document.getElementById(id).addEventListener('input', calcLossOfField); });
   calcLossOfField();
+}
+function lofOmicron(diameter, offset){
+  const centre = offset - diameter/2;
+  return { z: Math.abs(centre), phi: centre < 0 ? 270 : 90, radius: diameter/2 };
 }
 function drawMhoCircles(zones){
   const canvas = document.getElementById('lofCanvas'); if (!canvas) return; const ctx = canvas.getContext('2d');
@@ -543,11 +572,23 @@ function drawMhoCircles(zones){
   lofChart = safeChart(ctx, { type: 'line', data: { datasets }, options: { responsive: true, parsing: false, aspectRatio: 1, scales: { x: { type:'linear', title:{display:true,text:'R (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} }, y: { type:'linear', title:{display:true,text:'X (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} } }, plugins: { legend: { labels: { color: '#e7ecf7' } } } } });
 }
 function calcLossOfField(){
+  const panel = document.getElementById('panel-lof');
+  const mode = panel.querySelector('[data-savegroup="lofMode"] .active').dataset.value;
   const V = safeNum(document.getElementById('lofV').value, 20); const MVA = safeNum(document.getElementById('lofMva').value, 492); const PT = safeNum(document.getElementById('lofPT').value, 167); const CT = safeNum(document.getElementById('lofCT').value, 3600);
   const Xd = safeNum(document.getElementById('lofXd').value, 1.1888); const Xdp = safeNum(document.getElementById('lofXdp').value, 0.20577); const Z1t = safeNum(document.getElementById('lofZ1t').value, 0.1); const Z2t = safeNum(document.getElementById('lofZ2t').value, 0.5);
   const ZB = (V*V/MVA)*(CT/PT); const VNOM = V*1000/PT; const INOM = (MVA*1e6)/(Math.sqrt(3)*V*1000)/CT;
-  const Z1_diameter = ZB/(Math.sqrt(3)*Xdp); const Z1_offset = -Xd*ZB/2; const Z2_diameter = Xd*ZB; const Z2_offset = Z1_offset;
+  let Z1_diameter, Z1_offset, Z2_diameter, Z2_offset;
+  if (mode === 'manual'){
+    Z1_diameter = safeNum(document.getElementById('lofZ1d').value, 17.53); Z1_offset = safeNum(document.getElementById('lofZ1o').value, -1.8);
+    Z2_diameter = safeNum(document.getElementById('lofZ2d').value, 20.83); Z2_offset = safeNum(document.getElementById('lofZ2o').value, -1.8);
+  } else {
+    Z1_diameter = ZB; Z1_offset = -Xdp*ZB/2; Z2_diameter = Xd*ZB; Z2_offset = Z1_offset;
+  }
   const Z1_radius = Z1_diameter/2; const Z2_radius = Z2_diameter/2; const Z1_centerX = Z1_offset - Z1_radius; const Z2_centerX = Z2_offset - Z2_radius;
+  let warnHtml = '';
+  if (Z2_diameter < Z1_diameter) warnHtml += `<div class="result-flag flag-warn">⚠ Zone 2 diameter is smaller than Zone 1.</div>`;
+  if (Z2t < Z1t) warnHtml += `<div class="result-flag flag-warn">⚠ Zone 2 trip time is shorter than Zone 1.</div>`;
+  if (mode !== 'manual' && (Xd > 5 || Xdp > 5)) warnHtml += `<div class="result-flag flag-warn">⚠ Xd / Xd' look like percentages. Enter them in per-unit (e.g. 1.19, not 119).</div>`;
   document.getElementById('lofResults').innerHTML = `
     <div class="result-line"><span>Base impedance ZB</span><b>${ZB.toFixed(3)} Ω</b></div>
     <div class="result-line"><span>VNOM (secondary)</span><b>${VNOM.toFixed(2)} V</b></div>
@@ -558,7 +599,13 @@ function calcLossOfField(){
     <div class="result-line"><span>Zone 2 diameter</span><b>${Z2_diameter.toFixed(2)} Ω</b></div>
     <div class="result-line"><span>Zone 2 offset</span><b>${Z2_offset.toFixed(2)} Ω</b></div>
     <div class="result-line"><span>Zone 2 trip time</span><b>${Z2t} s</b></div>
+    ${warnHtml}
   `;
+  const o1 = lofOmicron(Z1_diameter, Z1_offset), o2 = lofOmicron(Z2_diameter, Z2_offset);
+  document.getElementById('lofOmicronTable').innerHTML = `<thead><tr><th>Omicron test values</th><th>|Z| (Ω)</th><th>Phi (°)</th><th>Radius (Ω)</th><th>Start (°)</th><th>End (°)</th></tr></thead><tbody>
+    <tr><td>Zone 1</td><td>${o1.z.toFixed(3)}</td><td>${o1.phi}</td><td>${o1.radius.toFixed(3)}</td><td>360</td><td>0</td></tr>
+    <tr><td>Zone 2</td><td>${o2.z.toFixed(3)}</td><td>${o2.phi}</td><td>${o2.radius.toFixed(3)}</td><td>360</td><td>0</td></tr>
+  </tbody>`;
   drawMhoCircles([
     {label:`Zone 2 (Xd, ${Z2t}s)`, centerR:0, centerX:Z2_centerX, radius:Z2_radius, color:'#ffb74f'},
     {label:`Zone 1 (Xd', ${Z1t}s)`, centerR:0, centerX:Z1_centerX, radius:Z1_radius, color:'#4fb0ff'},
@@ -571,7 +618,7 @@ const DP_RELAY_PRESETS = {
     label: 'Generic (R-X Ohms)',
     fieldLabels: {
       r1: 'R1 reach, Ph-Ph (Ω)', x1: 'X1 reach, Ph-Ph (Ω)', r0: 'R0 reach, zero-seq (Ω)', x0: 'X0 reach, zero-seq (Ω)',
-      minRis: 'Min resistive reach (Ω)', maxRis: 'Max resistive reach (Ω)', rev: 'Reverse reach override (Ω, mho, 0=auto)',
+      minRis: 'Min resistive reach, Ph-Ph (Ω)', maxRis: 'Max resistive reach, Ph-Ph (Ω)', minRisGE: 'Min resistive reach, Ph-E (Ω)', maxRisGE: 'Max resistive reach, Ph-E (Ω)', rev: 'Reverse reach override (Ω, mho, 0=auto)',
       maxAng: 'Right blinder angle (deg)', minAng: 'Left blinder angle (deg)', tilt: 'Tilt angle (deg)'
     },
     note: "Generic quadrilateral/mho R-X plane model using plain engineering terminology. Verify field mapping against your specific relay's setting/application manual before commissioning."
@@ -580,7 +627,7 @@ const DP_RELAY_PRESETS = {
     label: 'ABB Relion REx630',
     fieldLabels: {
       r1: 'R1 Zone, Ph-Ph (Ω)', x1: 'X1 Zone, Ph-Ph (Ω)', r0: 'R0 Zone, zero-seq (Ω)', x0: 'X0 Zone, zero-seq (Ω)',
-      minRis: 'Min Ris Reach (Ω)', maxRis: 'Max Ris Reach (Ω)', rev: 'Circle Radius override (Ω, mho, 0=auto)',
+      minRis: 'Min Ris Reach, Ph-Ph (Ω)', maxRis: 'Max Ris Reach, Ph-Ph (Ω)', minRisGE: 'Min Ris Reach, Ph-E (Ω)', maxRisGE: 'Max Ris Reach, Ph-E (Ω)', rev: 'Circle Radius override (Ω, mho, 0=auto)',
       maxAng: 'Max Phase Angle (right blinder, deg)', minAng: 'Min Phase Angle (left blinder, deg)', tilt: 'Tilt angle (deg, +ve increases area)'
     },
     note: 'ABB REx630-style parameter names. Ph-E reach auto-derived via (2×Z1+Z0)/3, matching the relay setting-sheet formula. Verified against REx630 example data.'
@@ -625,8 +672,10 @@ function renderDistProt(container){
           <div class="field"><label id="dpX1Label">X1 Zone, Ph-Ph (Ω)</label><input id="dpX1" type="number" value="28.78" step="0.01"></div>
           <div class="field"><label id="dpR0Label">R0 Zone, zero-seq (Ω)</label><input id="dpR0" type="number" value="5" step="0.01"></div>
           <div class="field"><label id="dpX0Label">X0 Zone, zero-seq (Ω)</label><input id="dpX0" type="number" value="65.5" step="0.01"></div>
-          <div class="field" id="dpRisWrap"><label id="dpMinRisLabel">Min Ris Reach (Ω)</label><input id="dpMinRis" type="number" value="7.77" step="0.01"></div>
-          <div class="field" id="dpMaxRisWrap"><label id="dpMaxRisLabel">Max Ris Reach (Ω)</label><input id="dpMaxRis" type="number" value="7.77" step="0.01"></div>
+          <div class="field" id="dpRisWrap"><label id="dpMinRisLabel">Min Ris Reach, Ph-Ph (Ω)</label><input id="dpMinRisPP" type="number" value="10" step="0.01"></div>
+          <div class="field" id="dpMaxRisWrap"><label id="dpMaxRisLabel">Max Ris Reach, Ph-Ph (Ω)</label><input id="dpMaxRisPP" type="number" value="10" step="0.01"></div>
+          <div class="field" id="dpRisGEWrap"><label id="dpMinRisGELabel">Min Ris Reach, Ph-E (Ω)</label><input id="dpMinRisGE" type="number" value="100" step="0.01"></div>
+          <div class="field" id="dpMaxRisGEWrap"><label id="dpMaxRisGELabel">Max Ris Reach, Ph-E (Ω)</label><input id="dpMaxRisGE" type="number" value="100" step="0.01"></div>
           <div class="field" id="dpRevWrap" style="display:none;"><label id="dpRevLabel">Circle Radius override (Ω, mho, 0=auto)</label><input id="dpRev" type="number" value="0" step="0.01"></div>
           <div class="field"><label id="dpMaxAngLabel">Max Phase Angle (right blinder, deg)</label><input id="dpMaxAng" type="number" value="45" step="0.1" min="0" max="60"></div>
           <div class="field"><label id="dpMinAngLabel">Min Phase Angle (left blinder, deg)</label><input id="dpMinAng" type="number" value="115" step="0.1" min="90" max="150"></div>
@@ -639,20 +688,20 @@ function renderDistProt(container){
       <div class="chart-wrap"><canvas id="dpCanvas"></canvas></div>
     </div>
     <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;" id="dpPresetNote"></p></div>
-    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">Ph-E reach: R1_PhE = (2×R1_PhPh + R0)/3, X1_PhE = (2×X1_PhPh + X0)/3. Quadrilateral vertices: origin → (MinRisReach, −MinRisReach·tan(MaxAngle)) → (MinRisReach, 0) → (MaxRisReach+R1, X1) → (X1/tan(MinAngle), X1) → origin, rotated by the tilt angle. Mho: circle with diameter between forward reach R1∠(atan2(X1,R1)) and the reverse point (0 = self-polarised), or overridden directly by the reverse reach field. Simplified for visualisation only — verify against the relay's technical/application manual before commissioning.</p></div>
+    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">Ph-E reach: R1_PhE = (2×R1_PhPh + R0)/3, X1_PhE = (2×X1_PhPh + X0)/3 — each loop uses its own Min/Max Ris Reach. Quadrilateral vertices: origin → (MinRis, −MinRis·tan(MaxAngle)) → (MinRis, (MinRis−MaxRis)·X1/R1) → (MaxRis+R1, X1) → (X1/tan(MinAngle), X1) → origin, rotated by the tilt angle. The middle vertex is the true intersection of the R=MinRis blinder with the reach-parallel line through R=MaxRis — it only sits on the R axis when MinRis equals MaxRis. Mho: circle with diameter between forward reach R1∠(atan2(X1,R1)) and the reverse point (0 = self-polarised), or overridden directly by the reverse reach field. Simplified for visualisation only — verify against the relay's technical/application manual before commissioning.</p></div>
   `;
-  container.querySelectorAll('.dp-type-btn').forEach(btn => { btn.onclick = () => { container.querySelectorAll('.dp-type-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); const isQuad = btn.dataset.value==='quad'; document.getElementById('dpRisWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpMaxRisWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpRevWrap').style.display = isQuad ? 'none' : ''; calcDistProt(); }; });
+  container.querySelectorAll('.dp-type-btn').forEach(btn => { btn.onclick = () => { container.querySelectorAll('.dp-type-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); const isQuad = btn.dataset.value==='quad'; document.getElementById('dpRisWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpMaxRisWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpRisGEWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpMaxRisGEWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpRevWrap').style.display = isQuad ? 'none' : ''; calcDistProt(); }; });
   container.querySelectorAll('.dp-loop-btn').forEach(btn => { btn.onclick = () => { container.querySelectorAll('.dp-loop-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); calcDistProt(); }; });
   document.getElementById('dpRelayType').addEventListener('change', () => { applyDpPreset(); calcDistProt(); });
-  ['dpR1','dpX1','dpR0','dpX0','dpMinRis','dpMaxRis','dpRev','dpMaxAng','dpMinAng','dpTilt','dpShowBlinders','dpShowLabels'].forEach(id => { document.getElementById(id).addEventListener('input', calcDistProt); document.getElementById(id).addEventListener('change', calcDistProt); });
+  ['dpR1','dpX1','dpR0','dpX0','dpMinRisPP','dpMaxRisPP','dpMinRisGE','dpMaxRisGE','dpRev','dpMaxAng','dpMinAng','dpTilt','dpShowBlinders','dpShowLabels'].forEach(id => { document.getElementById(id).addEventListener('input', calcDistProt); document.getElementById(id).addEventListener('change', calcDistProt); });
   applyDpPreset();
   calcDistProt();
 }
 function applyDpPreset(){
   const key = document.getElementById('dpRelayType').value;
   const preset = DP_RELAY_PRESETS[key] || DP_RELAY_PRESETS.generic;
-  const map = { dpR1Label:'r1', dpX1Label:'x1', dpR0Label:'r0', dpX0Label:'x0', dpMinRisLabel:'minRis', dpMaxRisLabel:'maxRis', dpRevLabel:'rev', dpMaxAngLabel:'maxAng', dpMinAngLabel:'minAng', dpTiltLabel:'tilt' };
-  Object.entries(map).forEach(([elId,fk]) => { const el = document.getElementById(elId); if (el) el.textContent = preset.fieldLabels[fk]; });
+  const map = { dpR1Label:'r1', dpX1Label:'x1', dpR0Label:'r0', dpX0Label:'x0', dpMinRisLabel:'minRis', dpMaxRisLabel:'maxRis', dpMinRisGELabel:'minRisGE', dpMaxRisGELabel:'maxRisGE', dpRevLabel:'rev', dpMaxAngLabel:'maxAng', dpMinAngLabel:'minAng', dpTiltLabel:'tilt' };
+  Object.entries(map).forEach(([elId,fk]) => { const el = document.getElementById(elId); if (el) el.textContent = preset.fieldLabels[fk] || el.textContent; });
   const noteEl = document.getElementById('dpPresetNote'); if (noteEl) noteEl.textContent = preset.note;
 }
 function dpRotate(pt, tiltRad){ return { x: pt.x*Math.cos(tiltRad) - pt.y*Math.sin(tiltRad), y: pt.x*Math.sin(tiltRad) + pt.y*Math.cos(tiltRad) }; }
@@ -664,8 +713,10 @@ function calcDistProt(){
   const X1pp = safeNum(document.getElementById('dpX1').value, 28.78);
   const R0 = safeNum(document.getElementById('dpR0').value, 5);
   const X0 = safeNum(document.getElementById('dpX0').value, 65.5);
-  const MinRis = safeNum(document.getElementById('dpMinRis').value, 7.77);
-  const MaxRis = safeNum(document.getElementById('dpMaxRis').value, 7.77);
+  const MinRisPP = safeNum(document.getElementById('dpMinRisPP').value, 10);
+  const MaxRisPP = safeNum(document.getElementById('dpMaxRisPP').value, 10);
+  const MinRisGE = safeNum(document.getElementById('dpMinRisGE').value, 100);
+  const MaxRisGE = safeNum(document.getElementById('dpMaxRisGE').value, 100);
   const Rev = safeNum(document.getElementById('dpRev').value, 0);
   const maxAngDeg = safeNum(document.getElementById('dpMaxAng').value, 45);
   const minAngDeg = safeNum(document.getElementById('dpMinAng').value, 115);
@@ -679,17 +730,24 @@ function calcDistProt(){
   const X1e = (2*X1pp + X0)/3;
   const R1 = loop==='phph' ? R1pp : R1e;
   const X1 = loop==='phph' ? X1pp : X1e;
+  const MinRis = loop==='phph' ? MinRisPP : MinRisGE;
+  const MaxRis = loop==='phph' ? MaxRisPP : MaxRisGE;
   const lineAngleDeg = Math.atan2(X1, R1)*180/Math.PI;
 
   const datasets = [];
   let resultsHtml = `<div class="result-line"><span>Ph-Ph line angle</span><b>${(Math.atan2(X1pp,R1pp)*180/Math.PI).toFixed(2)}°</b></div><div class="result-line"><span>Ph-E R1 / X1 (derived)</span><b>${R1e.toFixed(2)} / ${X1e.toFixed(2)} Ω</b></div><div class="result-line"><span>Ph-E line angle</span><b>${(Math.atan2(X1e,R1e)*180/Math.PI).toFixed(2)}°</b></div><div class="result-line"><span>Active loop line angle</span><b>${lineAngleDeg.toFixed(2)}°</b></div>`;
+  if (R1 <= 0 || X1 <= 0) resultsHtml += `<div class="result-flag flag-warn">⚠ R1 and X1 must be positive for the active loop.</div>`;
+  if (minAngDeg <= 90 || minAngDeg >= 180) resultsHtml += `<div class="result-flag flag-warn">⚠ Min phase angle is normally between 90° and 180°.</div>`;
+  if (maxAngDeg <= 0 || maxAngDeg >= 90) resultsHtml += `<div class="result-flag flag-warn">⚠ Max phase angle is normally between 0° and 90°.</div>`;
 
   let boundsX = [0], boundsY = [0];
   if (type === 'quad'){
+    const cornerY = R1 > 0 ? (MinRis-MaxRis)*X1/R1 : 0;
+    if (MinRis !== MaxRis) resultsHtml += `<div class="note">Min/Max Ris Reach differ for this loop, so the blinder-to-reach-line corner sits off the R axis at (${MinRis.toFixed(2)}, ${cornerY.toFixed(2)}) rather than on it.</div>`;
     const verts = [
       {x:0, y:0},
       {x:MinRis, y:-MinRis*Math.tan(maxAngRad)},
-      {x:MinRis, y:0},
+      {x:MinRis, y:cornerY},
       {x:MaxRis+R1, y:X1},
       {x:X1/Math.tan(minAngRad), y:X1},
       {x:0, y:0},
@@ -737,6 +795,385 @@ function calcDistProt(){
   document.getElementById('dpResults').innerHTML = resultsHtml;
 }
 
+// ===================== Current Imbalance (46) =====================
+function renderCurrentImbalance(container){
+  container.innerHTML = `
+    <h2>Current Imbalance (46) Calculator <span class="std-badge">Motor Protection</span></h2>
+    <p class="tool-desc">Phase current unbalance for motor protection, compared against alarm and trip levels. Imbalance is the largest deviation of any phase from the average current — expressed as % of FLC when the load is below FLC, and % of the average current at or above FLC.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="compact-form">
+          <div class="field"><label>Ia (A, primary)</label><input id="ciIa" type="number" value="222.5" step="0.1"></div>
+          <div class="field"><label>Ib (A, primary)</label><input id="ciIb" type="number" value="168" step="0.1"></div>
+          <div class="field"><label>Ic (A, primary)</label><input id="ciIc" type="number" value="168" step="0.1"></div>
+          <div class="field"><label>Full load current, FLC (A)</label><input id="ciFlc" type="number" value="140" step="0.1"></div>
+          <div class="field"><label>CT primary (A)</label><input id="ciCtPri" type="number" value="250" step="1"></div>
+          <div class="field"><label>CT secondary (A)</label><input id="ciCtSec" type="number" value="1" step="0.1"></div>
+          <div class="field"><label>Alarm level (%)</label><input id="ciAlarmPct" type="number" value="15" step="0.1"></div>
+          <div class="field"><label>Alarm delay (s)</label><input id="ciAlarmTime" type="number" value="5" step="0.1"></div>
+          <div class="field"><label>Trip level (%)</label><input id="ciTripPct" type="number" value="20" step="0.1"></div>
+          <div class="field"><label>Trip delay (s)</label><input id="ciTripTime" type="number" value="10" step="0.1"></div>
+        </div>
+        <div class="results" id="ciResults" style="margin-top:16px;"></div>
+      </div>
+      <div class="card"><table class="ref-table" id="ciTable"></table></div>
+    </div>
+  `;
+  ['ciIa','ciIb','ciIc','ciFlc','ciCtPri','ciCtSec','ciAlarmPct','ciAlarmTime','ciTripPct','ciTripTime'].forEach(id => { const el=document.getElementById(id); el.addEventListener('input', calcCurrentImbalance); el.addEventListener('change', calcCurrentImbalance); });
+  calcCurrentImbalance();
+  renderFormulaBlock(container, 'Reference formulas', [
+    String.raw`I_{av} = \dfrac{I_a+I_b+I_c}{3}, \quad I_m = \max(|I_{max}-I_{av}|,\ |I_{min}-I_{av}|)`,
+    String.raw`\%\text{unbalance} = \begin{cases}100\,I_m/\text{FLC} & I_{av} < \text{FLC}\\ 100\,I_m/I_{av} & I_{av}\geq\text{FLC}\end{cases}`
+  ]);
+}
+function calcCurrentImbalance(){
+  const ia = safeNum(document.getElementById('ciIa').value); const ib = safeNum(document.getElementById('ciIb').value); const ic = safeNum(document.getElementById('ciIc').value);
+  const flc = safeNum(document.getElementById('ciFlc').value, 140); const ctPri = safeNum(document.getElementById('ciCtPri').value, 1); const ctSec = safeNum(document.getElementById('ciCtSec').value, 1);
+  const alarmPct = safeNum(document.getElementById('ciAlarmPct').value, 15); const tripPct = safeNum(document.getElementById('ciTripPct').value, 20);
+  const alarmTime = safeNum(document.getElementById('ciAlarmTime').value, 5); const tripTime = safeNum(document.getElementById('ciTripTime').value, 10);
+  const ctr = ctSec > 0 ? ctPri/ctSec : 0;
+  const phases = [ia, ib, ic]; const iav = (ia+ib+ic)/3; const imax = Math.max(...phases); const imin = Math.min(...phases);
+  const im = Math.max(Math.abs(imax-iav), Math.abs(imin-iav));
+  const pctFlc = flc > 0 ? 100*im/flc : NaN; const pctIav = iav > 0 ? 100*im/iav : NaN;
+  const basis = iav >= flc ? 'average current' : 'FLC'; const pct = iav >= flc ? pctIav : pctFlc;
+  let flagClass = 'flag-good', flagText = '✓ NORMAL';
+  if (pct >= tripPct){ flagClass='flag-warn'; flagText='⚡ TRIP'; }
+  else if (pct >= alarmPct){ flagClass='flag-warn'; flagText='⚠ ALARM'; }
+  let warnHtml = '';
+  if (alarmPct > tripPct) warnHtml += `<div class="result-flag flag-warn">⚠ Alarm level is above the trip level.</div>`;
+  if (iav === 0) warnHtml += `<div class="result-flag flag-warn">⚠ Average current is zero; % of average is undefined.</div>`;
+  document.getElementById('ciResults').innerHTML = `
+    <div class="result-line"><span>Applied unbalance (based on ${basis})</span><b>${isNaN(pct)?'—':pct.toFixed(2)+'%'}</b></div>
+    <div class="result-line"><span>Alarm / trip levels</span><b>${alarmPct}% for ${alarmTime}s / ${tripPct}% for ${tripTime}s</b></div>
+    <div class="result-line"><span>Unbalance as % of FLC</span><b>${isNaN(pctFlc)?'—':pctFlc.toFixed(2)+'%'}</b></div>
+    <div class="result-line"><span>Unbalance as % of average current</span><b>${isNaN(pctIav)?'—':pctIav.toFixed(2)+'%'}</b></div>
+    <div class="result-line"><span>Maximum deviation from average (Im)</span><b>${im.toFixed(2)} A</b></div>
+    <div class="result-flag ${flagClass}">${flagText}</div>
+    ${warnHtml}
+  `;
+  document.getElementById('ciTable').innerHTML = `<thead><tr><th></th><th>Primary (A)</th><th>Secondary (A)</th></tr></thead><tbody>
+    <tr><td>Ia</td><td>${ia.toFixed(1)}</td><td>${(ctr>0?ia/ctr:0).toFixed(4)}</td></tr>
+    <tr><td>Ib</td><td>${ib.toFixed(1)}</td><td>${(ctr>0?ib/ctr:0).toFixed(4)}</td></tr>
+    <tr><td>Ic</td><td>${ic.toFixed(1)}</td><td>${(ctr>0?ic/ctr:0).toFixed(4)}</td></tr>
+    <tr><td>Average</td><td>${iav.toFixed(1)}</td><td>${(ctr>0?iav/ctr:0).toFixed(4)}</td></tr>
+    <tr><td>FLC</td><td>${flc.toFixed(1)}</td><td>${(ctr>0?flc/ctr:0).toFixed(4)}</td></tr>
+    <tr><td>CT ratio</td><td colspan="2">${ctr.toFixed(1)} : 1</td></tr>
+  </tbody>`;
+}
+
+// ===================== SEL-787 Differential Curve =====================
+let diffCurve787Chart = null;
+function renderDiffCurve787(container){
+  container.innerHTML = `
+    <h2>SEL-787 Differential Curve <span class="std-badge">Dual-Slope, xTAP</span></h2>
+    <p class="tool-desc">Dual-slope operate/restraint characteristic for the SEL-787 transformer differential element, in multiples of TAP. Above U87P the element is unrestrained.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="field"><label>O87P (minimum pickup, xTAP)</label><input id="dc7O87p" type="number" value="0.3" step="0.01"></div>
+        <div class="field"><label>U87P (unrestrained pickup, xTAP)</label><input id="dc7U87p" type="number" value="8" step="0.1"></div>
+        <div class="field"><label>IRS1 (slope 1 limit, xTAP)</label><input id="dc7Irs1" type="number" value="3" step="0.1"></div>
+        <div class="field"><label>SLP1 (%)</label><input id="dc7Slp1" type="number" value="25" step="1"></div>
+        <div class="field"><label>SLP2 (%)</label><input id="dc7Slp2" type="number" value="50" step="1"></div>
+        <div class="results" id="dc7Results"></div>
+      </div>
+      <div class="chart-wrap"><canvas id="dc7Canvas"></canvas></div>
+    </div>
+    <div class="card" style="margin-top:16px;"><table class="ref-table" id="dc7LineTable"></table></div>
+  `;
+  ['dc7O87p','dc7U87p','dc7Irs1','dc7Slp1','dc7Slp2'].forEach(id => { document.getElementById(id).addEventListener('input', calcDiffCurve787); });
+  calcDiffCurve787();
+  renderFormulaBlock(container, 'Reference formulas', [
+    String.raw`\text{Line 1: } y=O87P \quad \text{Line 2: } y=SLP1\cdot x \quad \text{Line 3: } y=SLP2\cdot(x-h)`,
+    String.raw`h = IRS1 - \dfrac{SLP1\cdot IRS1}{SLP2}`
+  ]);
+}
+function calcDiffCurve787(){
+  const o87p = safeNum(document.getElementById('dc7O87p').value, 0.3); const u87p = safeNum(document.getElementById('dc7U87p').value, 8);
+  const irs1 = safeNum(document.getElementById('dc7Irs1').value, 3); const slp1pct = safeNum(document.getElementById('dc7Slp1').value, 25); const slp2pct = safeNum(document.getElementById('dc7Slp2').value, 50);
+  const s1 = slp1pct/100, s2 = slp2pct/100;
+  const x1 = s1 > 0 ? o87p/s1 : 0; const yIrs = s1*irs1; const h = s2 > 0 ? irs1 - (s1*irs1)/s2 : irs1; const x3 = s2 > 0 ? u87p/s2 + h : irs1;
+  let warnHtml = '';
+  if (s2 < s1) warnHtml += `<div class="result-flag flag-warn">⚠ SLP2 is smaller than SLP1; the SEL-787 requires SLP2 ≥ SLP1.</div>`;
+  if (x1 >= irs1) warnHtml += `<div class="result-flag flag-warn">⚠ IRS1 is not beyond the Line 1 / Line 2 break (${x1.toFixed(3)}); Slope 1 is never reached.</div>`;
+  if (yIrs >= u87p) warnHtml += `<div class="result-flag flag-warn">⚠ The curve reaches U87P (${u87p}) before IRS1; check the settings.</div>`;
+  document.getElementById('dc7Results').innerHTML = `
+    <div class="result-line"><span>Line 1 to Line 2 break (restraint)</span><b>${x1.toFixed(3)} xTAP</b></div>
+    <div class="result-line"><span>Operate current at IRS1</span><b>${yIrs.toFixed(3)} xTAP</b></div>
+    <div class="result-line"><span>Line 3 x-intercept (h)</span><b>${h.toFixed(3)} xTAP</b></div>
+    <div class="result-line"><span>Line 3 reaches U87P at</span><b>${x3.toFixed(3)} xTAP</b></div>
+    ${warnHtml}
+  `;
+  const lines = [ {name:'Line 1', x1:0, y1:o87p, x2:x1, y2:o87p}, {name:'Line 2', x1:x1, y1:o87p, x2:irs1, y2:yIrs}, {name:'Line 3', x1:irs1, y1:yIrs, x2:x3, y2:u87p} ];
+  document.getElementById('dc7LineTable').innerHTML = `<thead><tr><th>Line</th><th>x from</th><th>x to</th><th>y from</th><th>y to</th></tr></thead><tbody>${lines.map(l=>`<tr><td>${l.name}</td><td>${l.x1.toFixed(3)}</td><td>${l.x2.toFixed(3)}</td><td>${l.y1.toFixed(3)}</td><td>${l.y2.toFixed(3)}</td></tr>`).join('')}</tbody>`;
+  const xEnd = Math.max(x3*1.15, x3+1);
+  const points = [{x:0,y:o87p},{x:x1,y:o87p},{x:irs1,y:yIrs},{x:x3,y:u87p},{x:xEnd,y:u87p}];
+  const ctx = document.getElementById('dc7Canvas'); if (diffCurve787Chart) diffCurve787Chart.destroy();
+  diffCurve787Chart = safeChart(ctx, { type:'line', data:{ datasets:[
+    {label:'Operate boundary', data:points, borderColor:'#4fb0ff', backgroundColor:'rgba(79,176,255,0.08)', fill:true, pointRadius:0, borderWidth:2, parsing:false},
+    {label:'Breakpoints', data:[{x:0,y:o87p},{x:x1,y:o87p},{x:irs1,y:yIrs},{x:x3,y:u87p}], borderColor:'#ffb74f', backgroundColor:'#ffb74f', pointRadius:5, showLine:false, type:'scatter', parsing:false}
+  ]}, options:{ responsive:true, parsing:false, scales:{ x:{type:'linear', min:0, title:{display:true,text:'Restraint current (xTAP)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}}, y:{type:'linear', min:0, title:{display:true,text:'Operate current (xTAP)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}} }, plugins:{legend:{labels:{color:'#e7ecf7'}}} } });
+}
+
+// ===================== SEL-787 Differential Pickup =====================
+function ctcFactor787(n){ if (n%2===1) return Math.sqrt(3); if ([2,4,8,10].includes(n)) return 3; if ([6,12].includes(n)) return 1.5; return NaN; }
+function renderDiffPickup787(container){
+  const ctcOptions = Array.from({length:13}, (_,i)=>`<option value="${i}" ${i===12?'selected':''}>${i}</option>`).join('');
+  const ctcOptionsW2 = Array.from({length:13}, (_,i)=>`<option value="${i}" ${i===11?'selected':''}>${i}</option>`).join('');
+  container.innerHTML = `
+    <h2>SEL-787 Differential Pickup <span class="std-badge">CT-Compensated Test Values</span></h2>
+    <p class="tool-desc">O87P pickup in secondary amps (Ph-Ph and Ph-E) with CT compensation, plus values to inject at the relay for a differential pickup test.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="compact-form">
+          <div class="field"><label>Rating (MVA)</label><input id="dp7Mva" type="number" value="15" step="0.1"></div>
+          <div class="field"><label>O87P (xTAP)</label><input id="dp7O87p" type="number" value="0.3" step="0.01"></div>
+          <div class="field"><label>HV winding voltage, L-L (V)</label><input id="dp7Vp" type="number" value="11000" step="1"></div>
+          <div class="field"><label>LV winding voltage, L-L (V)</label><input id="dp7Vs" type="number" value="3450" step="1"></div>
+          <div class="field"><label>HV CT ratio (:1)</label><input id="dp7CtrHv" type="number" value="1000" step="1"></div>
+          <div class="field"><label>LV CT ratio (:1)</label><input id="dp7CtrLv" type="number" value="3000" step="1"></div>
+          <div class="field"><label>W1CTC (HV CT compensation)</label><select id="dp7W1ctc">${ctcOptions}</select></div>
+          <div class="field"><label>W2CTC (LV CT compensation)</label><select id="dp7W2ctc">${ctcOptionsW2}</select></div>
+        </div>
+        <hr style="border-color:var(--border);margin:14px 0;">
+        <div class="compact-form">
+          <div class="field"><label>HV side: Ib at 180° (mA)</label><input id="dp7DIb" type="number" value="-100" step="1"></div>
+          <div class="field"><label>HV side: Ic at 180° (mA)</label><input id="dp7DIc" type="number" value="-100" step="1"></div>
+          <div class="field"><label>LV side: Ic at 180° (mA)</label><input id="dp7SIc" type="number" value="-100" step="1"></div>
+        </div>
+        <div class="results" id="dp7Results"></div>
+      </div>
+      <div class="card">
+        <table class="ref-table" id="dp7HvTable" style="margin-bottom:14px;"></table>
+        <table class="ref-table" id="dp7LvTable"></table>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px;"><div class="results centered" id="dp7Injection"></div></div>
+  `;
+  ['dp7Mva','dp7O87p','dp7Vp','dp7Vs','dp7CtrHv','dp7CtrLv','dp7W1ctc','dp7W2ctc','dp7DIb','dp7DIc','dp7SIc'].forEach(id => { const el=document.getElementById(id); el.addEventListener('input', calcDiffPickup787); el.addEventListener('change', calcDiffPickup787); });
+  calcDiffPickup787();
+  renderFormulaBlock(container, 'Reference formulas', [
+    String.raw`I = \dfrac{\text{MVA}\times10^6}{\sqrt3\,V}, \quad \text{Ph-Ph pickup} = \dfrac{O87P\cdot I}{\text{CT ratio}}, \quad \text{Ph-E pickup} = \text{Ph-Ph}\times\text{mult(CTC)}`
+  ]);
+}
+function calcDiffPickup787(){
+  const mva = safeNum(document.getElementById('dp7Mva').value, 15); const o87p = safeNum(document.getElementById('dp7O87p').value, 0.3);
+  const vp = safeNum(document.getElementById('dp7Vp').value, 11000); const vs = safeNum(document.getElementById('dp7Vs').value, 3450);
+  const ctrHv = safeNum(document.getElementById('dp7CtrHv').value, 1000); const ctrLv = safeNum(document.getElementById('dp7CtrLv').value, 3000);
+  const w1ctc = safeNum(document.getElementById('dp7W1ctc').value, 12); const w2ctc = safeNum(document.getElementById('dp7W2ctc').value, 11);
+  const dIb = safeNum(document.getElementById('dp7DIb').value, -100); const dIc = safeNum(document.getElementById('dp7DIc').value, -100); const sIc = safeNum(document.getElementById('dp7SIc').value, -100);
+  const SQRT3 = Math.sqrt(3);
+  const ip = (mva*1e6)/(SQRT3*vp); const is = (mva*1e6)/(SQRT3*vs);
+  const f1 = ctcFactor787(w1ctc), f2 = ctcFactor787(w2ctc);
+  let warnHtml = '';
+  if (isNaN(f1)) warnHtml += `<div class="result-flag flag-warn">⚠ W1CTC = ${w1ctc} has no 1-phase-to-earth multiplier in the lookup table.</div>`;
+  if (isNaN(f2)) warnHtml += `<div class="result-flag flag-warn">⚠ W2CTC = ${w2ctc} has no 1-phase-to-earth multiplier in the lookup table.</div>`;
+  const hvLL = o87p*ip/ctrHv; const lvLL = o87p*is/ctrLv; const hvLE = hvLL*f1; const lvLE = lvLL*f2;
+  const hvLLmA = hvLL*1000, lvLLmA = lvLL*1000;
+  const deltaIa = hvLLmA*f1 + (dIb+dIc)/2; const starIa = lvLLmA*f2 + sIc;
+  if (!(w1ctc===12 && w2ctc===11)) warnHtml += `<div class="result-flag flag-warn">⚠ The injection formulas were derived in the original sheet for W1CTC=12 and W2CTC=11. Verify before using other settings.</div>`;
+  document.getElementById('dp7Results').innerHTML = `
+    <div class="result-line"><span>HV winding rated current (Ip)</span><b>${ip.toFixed(2)} A</b></div>
+    <div class="result-line"><span>LV winding rated current (Is)</span><b>${is.toFixed(2)} A</b></div>
+    <div class="result-line"><span>Ph-E multiplier, W1CTC</span><b>${isNaN(f1)?'—':f1.toFixed(4)}</b></div>
+    <div class="result-line"><span>Ph-E multiplier, W2CTC</span><b>${isNaN(f2)?'—':f2.toFixed(4)}</b></div>
+    ${warnHtml}
+  `;
+  function sideTable(title, ll, le, llTol, leTol){
+    return `<thead><tr><th colspan="5">${title}</th></tr><tr><th></th><th>Pickup (A)</th><th>Pickup (mA)</th><th>-5% (mA)</th><th>+5% (mA)</th></tr></thead><tbody>
+      <tr><td>Ph-Ph</td><td>${ll.toFixed(4)}</td><td>${(ll*1000).toFixed(1)}</td><td>${((ll-llTol)*1000).toFixed(1)}</td><td>${((ll+llTol)*1000).toFixed(1)}</td></tr>
+      <tr><td>Ph-E</td><td>${le.toFixed(4)}</td><td>${(le*1000).toFixed(1)}</td><td>${((le-leTol)*1000).toFixed(1)}</td><td>${((le+leTol)*1000).toFixed(1)}</td></tr>
+    </tbody>`;
+  }
+  document.getElementById('dp7HvTable').innerHTML = sideTable('HV side pickup (secondary)', hvLL, hvLE, hvLL*0.05, hvLE*0.05);
+  document.getElementById('dp7LvTable').innerHTML = sideTable('LV side pickup (secondary)', lvLL, lvLE, lvLL*0.05, lvLE*0.05);
+  document.getElementById('dp7Injection').innerHTML = `
+    <div class="result-line"><span>HV side: Ph-Ph pickup</span><b>${hvLLmA.toFixed(1)} mA</b></div>
+    <div class="result-line"><span>HV side: Ia pickup (inject at 0°)</span><b>${deltaIa.toFixed(1)} mA</b></div>
+    <div class="result-line"><span>LV side: Ph-Ph pickup</span><b>${lvLLmA.toFixed(1)} mA</b></div>
+    <div class="result-line"><span>LV side: Ia pickup (inject at 0°)</span><b>${starIa.toFixed(1)} mA</b></div>
+  `;
+}
+
+// ===================== Differential Stability Check =====================
+function renderDiffStability(container){
+  container.innerHTML = `
+    <h2>Differential Stability Check <span class="std-badge">CT Injection Test</span></h2>
+    <p class="tool-desc">Compare injected secondary current (×CT ratio) with the relay's primary-referred reading on each winding, and get a pass/fail against a tolerance. Use this during commissioning to confirm CT polarity, ratio and relay scaling before an in-service differential element is trusted.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="compact-form">
+          <div class="field"><label>Winding 1 CT ratio (:1)</label><input id="dsCtrP" type="number" value="500" step="1"></div>
+          <div class="field"><label>Winding 2 CT ratio (:1)</label><input id="dsCtrS" type="number" value="1500" step="1"></div>
+          <div class="field"><label>Tolerance (%)</label><input id="dsTol" type="number" value="1.5" step="0.1"></div>
+        </div>
+        <hr style="border-color:var(--border);margin:14px 0;">
+        <p class="tool-desc" style="margin-bottom:8px;">Winding 1 (per phase)</p>
+        <div class="compact-form">
+          <div class="field"><label>Reading L1 (A primary)</label><input id="dsRp0" type="number" value="687" step="0.1"></div>
+          <div class="field"><label>Injected L1 (A secondary)</label><input id="dsIp0" type="number" value="1.37" step="0.01"></div>
+          <div class="field"><label>Reading L2 (A primary)</label><input id="dsRp1" type="number" value="686.7" step="0.1"></div>
+          <div class="field"><label>Injected L2 (A secondary)</label><input id="dsIp1" type="number" value="1.37" step="0.01"></div>
+          <div class="field"><label>Reading L3 (A primary)</label><input id="dsRp2" type="number" value="685.7" step="0.1"></div>
+          <div class="field"><label>Injected L3 (A secondary)</label><input id="dsIp2" type="number" value="1.37" step="0.01"></div>
+        </div>
+        <p class="tool-desc" style="margin:12px 0 8px;">Winding 2 (per phase)</p>
+        <div class="compact-form">
+          <div class="field"><label>Reading L1 (A primary)</label><input id="dsRs0" type="number" value="2103.3" step="0.1"></div>
+          <div class="field"><label>Injected L1 (A secondary)</label><input id="dsIs0" type="number" value="1.4" step="0.01"></div>
+          <div class="field"><label>Reading L2 (A primary)</label><input id="dsRs1" type="number" value="2099.4" step="0.1"></div>
+          <div class="field"><label>Injected L2 (A secondary)</label><input id="dsIs1" type="number" value="1.4" step="0.01"></div>
+          <div class="field"><label>Reading L3 (A primary)</label><input id="dsRs2" type="number" value="2099.4" step="0.1"></div>
+          <div class="field"><label>Injected L3 (A secondary)</label><input id="dsIs2" type="number" value="1.4" step="0.01"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="results centered" id="dsOverall"></div>
+        <table class="ref-table" id="dsTable" style="margin-top:14px;"></table>
+      </div>
+    </div>
+  `;
+  ['dsCtrP','dsCtrS','dsTol','dsRp0','dsIp0','dsRp1','dsIp1','dsRp2','dsIp2','dsRs0','dsIs0','dsRs1','dsIs1','dsRs2','dsIs2'].forEach(id => { document.getElementById(id).addEventListener('input', calcDiffStability); });
+  calcDiffStability();
+  renderFormulaBlock(container, 'Reference formulas', [
+    String.raw`\text{Expected} = \text{Injected}\times\text{CT ratio}, \quad \text{Error \%} = \dfrac{\text{Reading}-\text{Expected}}{\text{Expected}}\times100`
+  ]);
+}
+function dsCheck(reading, injected, ratio, tol){
+  const expected = injected*ratio;
+  let errPct;
+  if (expected === 0) errPct = reading === 0 ? 0 : Infinity;
+  else errPct = 100*(reading-expected)/expected;
+  return { reading, injected, expected, errPct, pass: Math.abs(errPct) <= tol };
+}
+function calcDiffStability(){
+  const ctrP = safeNum(document.getElementById('dsCtrP').value, 500); const ctrS = safeNum(document.getElementById('dsCtrS').value, 1500); const tol = safeNum(document.getElementById('dsTol').value, 1.5);
+  const readP = [0,1,2].map(i => safeNum(document.getElementById(`dsRp${i}`).value)); const injP = [0,1,2].map(i => safeNum(document.getElementById(`dsIp${i}`).value));
+  const readS = [0,1,2].map(i => safeNum(document.getElementById(`dsRs${i}`).value)); const injS = [0,1,2].map(i => safeNum(document.getElementById(`dsIs${i}`).value));
+  const p = [0,1,2].map(i => dsCheck(readP[i], injP[i], ctrP, tol)); const s = [0,1,2].map(i => dsCheck(readS[i], injS[i], ctrS, tol));
+  const pass = p.concat(s).every(r => r.pass);
+  document.getElementById('dsOverall').innerHTML = `<div class="result-line"><span>Overall result</span><b style="color:${pass?'var(--good)':'var(--warn)'};">${pass?'✓ PASS':'⚡ FAIL'}</b></div>` + (tol<=0 ? `<div class="result-flag flag-warn">⚠ Tolerance must be greater than zero.</div>` : '');
+  function rows(label, list){ return list.map((c,i) => `<tr><td>${label} L${i+1}</td><td>${c.injected.toFixed(3)}</td><td>${c.expected.toFixed(1)}</td><td>${c.reading.toFixed(1)}</td><td>${isFinite(c.errPct)?c.errPct.toFixed(2):'∞'}</td><td class="${c.pass?'flag-good':'flag-warn'}">${c.pass?'PASS':'FAIL'}</td></tr>`).join(''); }
+  document.getElementById('dsTable').innerHTML = `<thead><tr><th>Phase</th><th>Injected (A)</th><th>Expected</th><th>Reading</th><th>Error %</th><th>Result</th></tr></thead><tbody>${rows('W1',p)}${rows('W2',s)}</tbody>`;
+}
+
+// ===================== Underpower (32) =====================
+function upCurrentFor(kw, vtPri, pf, ctr){ return (kw*1000)/(Math.sqrt(3)*vtPri*pf)/ctr; }
+function upSettingTable(kw, vtPri, pf, ctr, flc){
+  return [90,95,100,105,110].map(pct => { const p = kw*pct/100; const i = upCurrentFor(p, vtPri, pf, ctr); return { pct, kw:p, iSec:i, iPri:i*ctr, pctFlc: flc>0 ? 100*i*ctr/flc : NaN }; });
+}
+function renderUnderpower(container){
+  container.innerHTML = `
+    <h2>Underpower (32) Test Current <span class="std-badge">Motor Protection</span></h2>
+    <p class="tool-desc">Secondary current to inject for a kW setting, and the kW represented by a given (possibly unbalanced) secondary current. Assumes rated voltage is applied and current is in phase with voltage for pf = 1.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="compact-form">
+          <div class="field"><label>VT primary, L-L (V)</label><input id="upVtPri" type="number" value="3300" step="1"></div>
+          <div class="field"><label>VT secondary, L-L (V)</label><input id="upVtSec" type="number" value="110" step="0.1"></div>
+          <div class="field"><label>CT ratio (:1)</label><input id="upCtr" type="number" value="100" step="1"></div>
+          <div class="field"><label>Full load current (A)</label><input id="upFlc" type="number" value="140" step="0.1"></div>
+          <div class="field"><label>Power factor for the test</label><input id="upPf" type="number" value="1" step="0.01" min="0" max="1"></div>
+          <div class="field"><label>Pickup setting (kW)</label><input id="upPickupKw" type="number" value="80" step="1"></div>
+          <div class="field"><label>Trip setting (kW)</label><input id="upTripKw" type="number" value="100" step="1"></div>
+        </div>
+        <hr style="border-color:var(--border);margin:14px 0;">
+        <p class="tool-desc" style="margin-bottom:8px;">Check a current (secondary A, balanced or not)</p>
+        <div class="compact-form">
+          <div class="field"><label>Ia (A sec)</label><input id="upIa" type="number" value="0.139" step="0.001"></div>
+          <div class="field"><label>Ib (A sec)</label><input id="upIb" type="number" value="0.139" step="0.001"></div>
+          <div class="field"><label>Ic (A sec)</label><input id="upIc" type="number" value="0.139" step="0.001"></div>
+        </div>
+        <div class="results" id="upResults" style="margin-top:14px;"></div>
+      </div>
+      <div class="card">
+        <table class="ref-table" id="upPickupTable" style="margin-bottom:14px;"></table>
+        <table class="ref-table" id="upTripTable"></table>
+      </div>
+    </div>
+  `;
+  ['upVtPri','upVtSec','upCtr','upFlc','upPf','upPickupKw','upTripKw','upIa','upIb','upIc'].forEach(id => { document.getElementById(id).addEventListener('input', calcUnderpower); });
+  calcUnderpower();
+  renderFormulaBlock(container, 'Reference formulas', [
+    String.raw`P = \sum V_{LN,pri}\cdot I_{pri}\cdot pf \; / \;1000`,
+    String.raw`I_{sec} = \dfrac{P\times1000}{\sqrt3\,V_{LL,pri}\cdot pf}\;/\;\text{CT ratio}`
+  ]);
+}
+function calcUnderpower(){
+  const vtPri = safeNum(document.getElementById('upVtPri').value, 3300); const vtSec = safeNum(document.getElementById('upVtSec').value, 110);
+  const ctr = safeNum(document.getElementById('upCtr').value, 100); const flc = safeNum(document.getElementById('upFlc').value, 140);
+  const pf = safeNum(document.getElementById('upPf').value, 1); const pickupKw = safeNum(document.getElementById('upPickupKw').value, 80); const tripKw = safeNum(document.getElementById('upTripKw').value, 100);
+  const ia = safeNum(document.getElementById('upIa').value); const ib = safeNum(document.getElementById('upIb').value); const ic = safeNum(document.getElementById('upIc').value);
+  const SQRT3 = Math.sqrt(3);
+  const vLNpri = vtPri/SQRT3; const vLNsec = vtSec/SQRT3; const vtRatio = vtSec>0 ? vtPri/vtSec : 0;
+  const iPri = [ia,ib,ic].map(i => i*ctr); const kw = iPri.reduce((sum,i) => sum + vLNpri*i*pf, 0)/1000;
+  let warnHtml = ''; if (pf <= 0 || pf > 1) warnHtml += `<div class="result-flag flag-warn">⚠ Power factor should be between 0 and 1.</div>`;
+  const pickupISec = upCurrentFor(pickupKw, vtPri, pf, ctr); const tripISec = upCurrentFor(tripKw, vtPri, pf, ctr);
+  document.getElementById('upResults').innerHTML = `
+    <div class="result-line"><span>Pickup setting (${pickupKw} kW): current to inject</span><b>${pickupISec.toFixed(4)} A sec</b></div>
+    <div class="result-line"><span>Trip setting (${tripKw} kW): current to inject</span><b>${tripISec.toFixed(4)} A sec</b></div>
+    <div class="result-line"><span>Voltage to apply (L-N secondary)</span><b>${vLNsec.toFixed(3)} V</b></div>
+    <div class="result-line"><span>VT ratio</span><b>${vtRatio.toFixed(2)} : 1</b></div>
+    <div class="result-line"><span>Power for the entered current</span><b>${kw.toFixed(2)} kW</b></div>
+    <div class="result-line"><span>Versus pickup setting</span><b>${kw < pickupKw ? 'BELOW' : 'ABOVE'}</b></div>
+    <div class="result-line"><span>Versus trip setting</span><b>${kw < tripKw ? 'BELOW' : 'ABOVE'}</b></div>
+    ${warnHtml}
+  `;
+  function table(name, kwSetting){
+    const rows = upSettingTable(kwSetting, vtPri, pf, ctr, flc);
+    return `<thead><tr><th colspan="5">${name} (${kwSetting} kW): test points</th></tr><tr><th>% of setting</th><th>kW</th><th>I sec (A)</th><th>I pri (A)</th><th>% FLC</th></tr></thead><tbody>${rows.map(t => `<tr><td>${t.pct}%</td><td>${t.kw.toFixed(2)}</td><td>${t.iSec.toFixed(4)}</td><td>${t.iPri.toFixed(2)}</td><td>${isNaN(t.pctFlc)?'—':t.pctFlc.toFixed(1)}</td></tr>`).join('')}</tbody>`;
+  }
+  document.getElementById('upPickupTable').innerHTML = table('Pickup', pickupKw);
+  document.getElementById('upTripTable').innerHTML = table('Trip', tripKw);
+}
+
+// ===================== Volts/Hz Overexcitation (24) =====================
+function vhzParseList(text){ return String(text).split(/[\s,;]+/).filter(Boolean).map(Number).filter(n => isFinite(n) && n > 0); }
+function renderVoltsHz(container){
+  container.innerHTML = `
+    <h2>Volts/Hz Overexcitation (24) <span class="std-badge">Generator Protection</span></h2>
+    <p class="tool-desc">Pickup V/Hz for each trip stage and the voltage to apply at each test frequency. Enter the nominal voltage on the same basis (L-N or L-L) as the relay setting.</p>
+    <div class="grid">
+      <div class="card">
+        <div class="compact-form">
+          <div class="field"><label>Nominal voltage at relay (V)</label><input id="vhzVnom" type="number" value="63.51" step="0.01"></div>
+          <div class="field"><label>Nominal frequency (Hz)</label><input id="vhzFnom" type="number" value="50" step="0.1"></div>
+          <div class="field"><label>Trip setting 1 (pu)</label><input id="vhzTrip1" type="number" value="1.18" step="0.001"></div>
+          <div class="field"><label>Trip setting 2 (pu)</label><input id="vhzTrip2" type="number" value="1.1" step="0.001"></div>
+          <div class="field"><label>Test frequency (Hz)</label><input id="vhzFset" type="number" value="48.48" step="0.01"></div>
+        </div>
+        <div class="field"><label>Sweep frequencies (comma separated)</label><input id="vhzFreqList" type="text" value="45, 46, 47, 48, 48.48, 49, 50"></div>
+        <div class="results" id="vhzResults"></div>
+      </div>
+      <div class="card"><table class="ref-table" id="vhzSweepTable"></table></div>
+    </div>
+  `;
+  ['vhzVnom','vhzFnom','vhzTrip1','vhzTrip2','vhzFset','vhzFreqList'].forEach(id => { document.getElementById(id).addEventListener('input', calcVoltsHz); });
+  calcVoltsHz();
+  renderFormulaBlock(container, 'Reference formulas', [
+    String.raw`\text{Nominal V/Hz} = \dfrac{V_{nom}}{f_{nom}}, \quad \text{Pickup V/Hz} = \text{setting(pu)}\times\text{Nominal V/Hz}`,
+    String.raw`V_{apply} = f_{test}\times\text{Pickup V/Hz}`
+  ]);
+}
+function calcVoltsHz(){
+  const vnom = safeNum(document.getElementById('vhzVnom').value, 63.51); const fnom = safeNum(document.getElementById('vhzFnom').value, 50);
+  const trip1 = safeNum(document.getElementById('vhzTrip1').value, 1.18); const trip2 = safeNum(document.getElementById('vhzTrip2').value, 1.1);
+  const fset = safeNum(document.getElementById('vhzFset').value, 48.48); const freqListRaw = document.getElementById('vhzFreqList').value;
+  const ratio = fnom > 0 ? vnom/fnom : 0; const t1 = trip1*ratio, t2 = trip2*ratio;
+  const freqs = vhzParseList(freqListRaw);
+  let warnHtml = ''; if (trip2 > trip1) warnHtml += `<div class="result-flag flag-warn">⚠ Trip 2 is above Trip 1; normally the higher setting is the faster stage.</div>`;
+  if (freqListRaw && !freqs.length) warnHtml += `<div class="result-flag flag-warn">⚠ No valid frequencies found in the sweep list.</div>`;
+  document.getElementById('vhzResults').innerHTML = `
+    <div class="result-line"><span>Trip 1: voltage to apply at ${fset} Hz</span><b>${(fset*t1).toFixed(3)} V</b></div>
+    <div class="result-line"><span>Trip 2: voltage to apply at ${fset} Hz</span><b>${(fset*t2).toFixed(3)} V</b></div>
+    <div class="result-line"><span>Nominal V/Hz</span><b>${ratio.toFixed(4)} V/Hz</b></div>
+    <div class="result-line"><span>Trip 1 pickup V/Hz</span><b>${t1.toFixed(4)} V/Hz</b></div>
+    <div class="result-line"><span>Trip 2 pickup V/Hz</span><b>${t2.toFixed(4)} V/Hz</b></div>
+    ${warnHtml}
+  `;
+  const sweep = freqs.map(f => ({ f, v1: f*t1, v2: f*t2, pct1: vnom>0?100*f*t1/vnom:0, pct2: vnom>0?100*f*t2/vnom:0 }));
+  document.getElementById('vhzSweepTable').innerHTML = sweep.length ? `<thead><tr><th>Frequency (Hz)</th><th>Trip 1 (V)</th><th>% nominal</th><th>Trip 2 (V)</th><th>% nominal</th></tr></thead><tbody>${sweep.map(s => `<tr><td>${s.f}</td><td>${s.v1.toFixed(3)}</td><td>${s.pct1.toFixed(1)}</td><td>${s.v2.toFixed(3)}</td><td>${s.pct2.toFixed(1)}</td></tr>`).join('')}</tbody>` : '';
+}
+
 // ===================== Arc Flash & Standards Library =====================
 function renderArcFlash(container){
   container.innerHTML = `
@@ -772,7 +1209,7 @@ function initApp(){
   const sideNav = document.getElementById('sideNav'); const app = document.getElementById('app'); const topbarTitle = document.getElementById('topbarTitle');
   sideNav.innerHTML = TOOL_GROUPS.map(g => `<div class="side-group"><div class="side-group-label">${g.label}</div>${g.tools.map(t => `<button type="button" class="side-link" data-tool="${t.id}">${t.label}</button>`).join('')}</div>`).join('');
   app.innerHTML = TOOLS.map(t => `<section class="tool-panel" id="panel-${t.id}"></section>`).join('');
-  const renderers = { tcc: renderTCC, symcomp: renderSymComp, ctsat: renderCTSat, diff87: renderDiff87, fault: renderFault, txfmr: renderTxfmr, lof: renderLossOfField, distprot: renderDistProt, arcflash: renderArcFlash, references: renderReferences };
+  const renderers = { tcc: renderTCC, symcomp: renderSymComp, ctsat: renderCTSat, diff87: renderDiff87, fault: renderFault, txfmr: renderTxfmr, diffcurve787: renderDiffCurve787, diffpickup787: renderDiffPickup787, diffstability: renderDiffStability, currentimbalance: renderCurrentImbalance, underpower: renderUnderpower, lof: renderLossOfField, voltshz: renderVoltsHz, distprot: renderDistProt, arcflash: renderArcFlash, references: renderReferences };
   function activate(id){
     document.querySelectorAll('.side-link').forEach(b => b.classList.toggle('active', b.dataset.tool===id));
     document.querySelectorAll('.tool-panel').forEach(p => p.classList.toggle('active', p.id===`panel-${id}`));

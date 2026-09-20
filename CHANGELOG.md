@@ -2,6 +2,19 @@
 
 All notable changes to the Protection Engineering Toolkit are documented here.
 
+## [0.9.0] - 2026-09-20
+
+### Added
+- Integrated six new calculators from the separately-reviewed "calculator site" spreadsheet port into the main app (`app.js`), each with a formula block and full save/load support: **Current Imbalance (46)**, **SEL-787 Differential Curve**, **SEL-787 Differential Pickup**, **Differential Stability Check** (CT injection pass/fail), **Underpower (32)**, and **Volts/Hz Overexcitation (24)**. New "Motor Protection" nav group added for the first two.
+- **Loss of Field (40)**: added a calc/manual zone-sizing toggle, an Omicron test-value table (|Z|, Phi, radius), input warnings (Zone 2 smaller than Zone 1, Zone 2 faster than Zone 1, Xd/Xd' entered as percent instead of pu), and two load-example presets.
+
+### Fixed
+- **Loss of Field (40): Zone 1 diameter and offset formulas were swapped.** Zone 1 diameter was computed as `ZB/(√3×Xd')` and offset as `-Xd×ZB/2`; standard practice (confirmed against a verified, spreadsheet-tested reference implementation) is Zone 1 diameter = 1.0 pu (= ZB) and offset = `-Xd'×ZB/2`. For the 492 MVA worked example this changed Zone 1 diameter from ~49 Ω to the correct 17.53 Ω. This affected every setting calculated with this tool since it was added — resettle any values taken from it.
+- **Distance Protection quadrilateral: incorrect corner when Min Ris Reach ≠ Max Ris Reach.** The blinder/reach-line corner was hardcoded to `(MinRis, 0)`, which is only correct when the two resistive-reach settings are equal; it's now the true line intersection, `(MinRis, (MinRis−MaxRis)×X1/R1)`. Min/Max Ris Reach are now also set independently per loop (Ph-Ph vs Ph-E), matching real relay setting sheets, plus added range warnings on the phase angle inputs.
+
+### Changed
+- Merged latest `main` (which added the reviewed calculator-site source under `calculators/calculator site/` and removed the old raw spreadsheet files) into this branch. That folder stays out of the deployed site per `.assetsignore` until specifically integrated tool-by-tool as above.
+
 ## [0.8.0] - 2026-09-20
 
 ### Changed
