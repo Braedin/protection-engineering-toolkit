@@ -2,6 +2,11 @@
 
 All notable changes to the Protection Engineering Toolkit are documented here.
 
+## [0.9.1] - 2026-09-20
+
+### Fixed
+- **Loss of Field (40): the R-X mho plot could render as a broken/open arc instead of two closed circles.** Chart.js's automatic axis scaling picked a window that didn't even cover the circle data for some zone size combinations (e.g. the manual-mode test preset). Both axes now use explicit, equal-span bounds computed from the actual zone geometry, the same approach already used for the Distance Protection plot. Verified against a real Chart.js build in both calc and manual mode.
+
 ## [0.9.0] - 2026-09-20
 
 ### Added

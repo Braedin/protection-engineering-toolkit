@@ -1,4 +1,4 @@
-// ===================== Protection Engineering Toolkit v0.9.0 =====================
+// ===================== Protection Engineering Toolkit v0.9.1 =====================
 const TOOL_GROUPS = [
   { label: 'Overcurrent', tools: [ {id:'tcc', label:'TCC Plotter'} ] },
   { label: 'System Analysis', tools: [ {id:'symcomp', label:'Symmetrical Components'}, {id:'fault', label:'Fault Level Calculator'} ] },
@@ -568,8 +568,17 @@ function drawMhoCircles(zones){
     const points = []; for (let a = 0; a <= 360; a += 2){ const rad = a * Math.PI/180; const x = z.centerR + z.radius*Math.cos(rad); const y = z.centerX + z.radius*Math.sin(rad); points.push({x, y}); }
     return { label: z.label, data: points, borderColor: z.color, backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, showLine: true, fill: false, parsing: false };
   });
+  // Chart.js's auto-scale can pick an axis window that doesn't even cover the data when two
+  // circles of different size/offset are plotted together (observed: window ended up entirely
+  // to one side of an origin-centred circle). Compute explicit, equal-span bounds ourselves.
+  let boundsX = [0], boundsY = [0];
+  zones.forEach(z => { boundsX.push(z.centerR - z.radius, z.centerR + z.radius); boundsY.push(z.centerX - z.radius, z.centerX + z.radius); });
+  const minDataX = Math.min(...boundsX), maxDataX = Math.max(...boundsX), minDataY = Math.min(...boundsY), maxDataY = Math.max(...boundsY);
+  const span = Math.max(maxDataX-minDataX, maxDataY-minDataY, 1) * 1.15;
+  const midX = (minDataX+maxDataX)/2, midY = (minDataY+maxDataY)/2;
+  const minX = midX-span/2, maxX = midX+span/2, minY = midY-span/2, maxY = midY+span/2;
   if (lofChart) lofChart.destroy();
-  lofChart = safeChart(ctx, { type: 'line', data: { datasets }, options: { responsive: true, parsing: false, aspectRatio: 1, scales: { x: { type:'linear', title:{display:true,text:'R (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} }, y: { type:'linear', title:{display:true,text:'X (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} } }, plugins: { legend: { labels: { color: '#e7ecf7' } } } } });
+  lofChart = safeChart(ctx, { type: 'line', data: { datasets }, options: { responsive: true, parsing: false, aspectRatio: 1, scales: { x: { type:'linear', min:minX, max:maxX, title:{display:true,text:'R (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} }, y: { type:'linear', min:minY, max:maxY, title:{display:true,text:'X (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} } }, plugins: { legend: { labels: { color: '#e7ecf7' } } } } });
 }
 function calcLossOfField(){
   const panel = document.getElementById('panel-lof');
