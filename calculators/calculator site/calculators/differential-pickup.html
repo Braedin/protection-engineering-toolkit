@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Differential pickup - Protection Toolkit</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-base="../">
+<main class="wrap" id="app"></main>
+<script src="../js/core.js"></script>
+<script src="../js/calcs/differential-pickup.js"></script>
+<script>
+var CTC = [];
+for (var i = 0; i <= 12; i++) CTC.push({ value: i, label: String(i) });
+TK.mount({
+  id: 'differential-pickup',
+  title: 'Differential pickup (SEL-787)',
+  subtitle: 'O87P pickup in secondary amps with CT compensation, plus values to inject at the relay.',
+  source: 'Differential Pickup SEL 787.xlsx',
+  inputs: [
+    { group: 'Transformer' },
+    { id: 'mva', label: 'Rating', unit: 'MVA', value: 15, minExclusive: 0 },
+    { id: 'vp', label: 'HV winding voltage (L-L)', unit: 'V', value: 11000, minExclusive: 0 },
+    { id: 'vs', label: 'LV winding voltage (L-L)', unit: 'V', value: 3450, minExclusive: 0 },
+    { group: 'CT ratios (primary A per secondary A)' },
+    { id: 'ctrHv', label: 'HV CT ratio', unit: ': 1', value: 1000, minExclusive: 0 },
+    { id: 'ctrLv', label: 'LV CT ratio', unit: ': 1', value: 3000, minExclusive: 0 },
+    { group: 'Relay settings' },
+    { id: 'o87p', label: 'O87P', unit: 'xTAP', value: 0.3, minExclusive: 0 },
+    { id: 'w1ctc', label: 'W1CTC (HV CT compensation)', type: 'select', value: 12, options: CTC },
+    { id: 'w2ctc', label: 'W2CTC (LV CT compensation)', type: 'select', value: 11, options: CTC },
+    { group: 'Injection, return currents' },
+    { id: 'dIb', label: 'HV side: Ib at 180°', unit: 'mA', value: -100 },
+    { id: 'dIc', label: 'HV side: Ic at 180°', unit: 'mA', value: -100 },
+    { id: 'sIc', label: 'LV side: Ic at 180°', unit: 'mA', value: -100 }
+  ],
+  calc: function (v) {
+    var r = TK.calcs.differentialPickup.compute(v);
+    function side(name, s) {
+      return { title: name, table: {
+        head: ['', 'Pickup (A)', 'Pickup (mA)', '-5% (mA)', '+5% (mA)'], dp: [0, 4, 1, 1, 1],
+        rows: [
+          ['Ph-Ph', s.ll, s.ll * 1000, (s.ll - s.llTol) * 1000, (s.ll + s.llTol) * 1000],
+          ['Ph-E', s.le, s.le * 1000, (s.le - s.leTol) * 1000, (s.le + s.leTol) * 1000]
+        ] } };
+    }
+    return {
+      warnings: r.warnings,
+      sections: [
+        { title: 'Rated current', rows: [
+          { label: 'HV winding (Ip)', value: r.ip, unit: 'A', dp: 2 },
+          { label: 'LV winding (Is)', value: r.is, unit: 'A', dp: 2 },
+          { label: 'Ph-E multiplier, W1CTC', value: r.f1, dp: 4 },
+          { label: 'Ph-E multiplier, W2CTC', value: r.f2, dp: 4 }
+        ] },
+        side('HV side pickup (secondary)', r.hv),
+        side('LV side pickup (secondary)', r.lv),
+        { title: 'Injection: Ia at 0° for 1-phase-to-earth pickup', rows: [
+          { label: 'HV side: Ph-Ph pickup', value: r.inj.deltaLLmA, unit: 'mA', dp: 1 },
+          { label: 'HV side: Ia pickup', value: r.inj.deltaIa, unit: 'mA', dp: 1, strong: true },
+          { label: 'LV side: Ph-Ph pickup', value: r.inj.starLLmA, unit: 'mA', dp: 1 },
+          { label: 'LV side: Ia pickup', value: r.inj.starIa, unit: 'mA', dp: 1, strong: true }
+        ] }
+      ]
+    };
+  },
+  formulas: [
+    { label: 'Rated current', text: 'I = MVA x 10^6 / (sqrt3 x V)' },
+    { label: 'Ph-Ph pickup', text: 'O87P x I / CT ratio' },
+    { label: 'Ph-E pickup', text: 'Ph-Ph pickup x multiplier(CTC)' },
+    { label: 'HV injection', text: 'Ia = LL x mult1 + (Ib + Ic) / 2' },
+    { label: 'LV injection', text: 'Ia = LL x mult2 + Ic' }
+  ],
+  notes: [
+    'The multiplier lookup (odd = sqrt3, 2/4/8/10 = 3, 6/12 = 1.5) is carried over from the spreadsheet. Check it against the SEL-787 manual.',
+    'The injection formulas came from the sheet for W1CTC = 12 and W2CTC = 11. A warning shows for other combinations.',
+    'Changed from the spreadsheet: the injection values now divide by the CT ratio (it only worked for a 1000:1 HV CT) and the LV Ph-E value uses the W2CTC multiplier instead of a fixed sqrt3.'
+  ]
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distance zone REF630 - Protection Toolkit</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-base="../">
+<main class="wrap" id="app"></main>
+<script src="../js/core.js"></script>
+<script src="../js/calcs/distance-ref630.js"></script>
+<script>
+TK.mount({
+  id: 'distance-ref630',
+  title: 'Distance zone (REF630)',
+  subtitle: 'Quadrilateral Ph-Ph and Ph-E zones, with the line-cartesian values for the Omicron test set.',
+  source: 'REF 630 Distance Protection R1.xlsx',
+  inputs: [
+    { group: 'Zone reach (from relay, Ω secondary)' },
+    { id: 'r1', label: 'R1 zone', unit: 'Ω', value: 14, minExclusive: 0 },
+    { id: 'x1', label: 'X1 zone', unit: 'Ω', value: 30, minExclusive: 0 },
+    { id: 'r0', label: 'R0 zone', unit: 'Ω', value: 6 },
+    { id: 'x0', label: 'X0 zone', unit: 'Ω', value: 60 },
+    { group: 'Resistive reach, Ph-Ph' },
+    { id: 'rMaxPP', label: 'Max resistive reach', unit: 'Ω', value: 10, min: 0 },
+    { id: 'rMinPP', label: 'Min resistive reach', unit: 'Ω', value: 10, min: 0 },
+    { group: 'Resistive reach, Ph-E' },
+    { id: 'rMaxGE', label: 'Max ground resistive reach', unit: 'Ω', value: 100, min: 0 },
+    { id: 'rMinGE', label: 'Min ground resistive reach', unit: 'Ω', value: 100, min: 0 },
+    { group: 'Directional angles' },
+    { id: 'minAngle', label: 'Min phase angle', unit: '°', value: 100, min: 0, max: 180 },
+    { id: 'maxAngle', label: 'Max phase angle', unit: '°', value: 60, min: 0, max: 90 }
+  ],
+  calc: function (v) {
+    var r = TK.calcs.distanceRef630.compute(v);
+    function lineTable(title, z) {
+      return { title: title + ': Omicron line-cartesian values', table: {
+        head: ['Line', 'R (Ω)', 'X (Ω)', 'Angle (°)'], dp: [0, 3, 3, 2],
+        rows: z.lines.map(function (l) { return [l.name, l.r, l.x, l.angle]; }) } };
+    }
+    function plot(title, z) {
+      return { title: title + ': zone', plot: {
+        title: title, xlabel: 'R (Ω)', ylabel: 'X (Ω)', equal: true, include: [[0, 0]],
+        series: [
+          { name: 'Zone boundary', pts: z.polygon, fill: true, markers: true },
+          { name: 'Reach line (' + TK.fmt(z.reachAngle, 1) + '°)', pts: [[0, 0], [z.r1, z.x1]], dash: '6 4', markers: false }
+        ] } };
+    }
+    return {
+      warnings: r.warnings,
+      sections: [
+        { title: 'Ph-E loop reach', rows: [
+          { label: 'R1 (residual compensated)', value: r.residual.r, unit: 'Ω', dp: 3 },
+          { label: 'X1 (residual compensated)', value: r.residual.x, unit: 'Ω', dp: 3 },
+          { label: 'Ph-Ph reach angle', value: r.phPh.reachAngle, unit: '°', dp: 2 },
+          { label: 'Ph-E reach angle', value: r.phE.reachAngle, unit: '°', dp: 2 }
+        ] },
+        lineTable('Ph-Ph', r.phPh), plot('Ph-Ph', r.phPh),
+        lineTable('Ph-E', r.phE), plot('Ph-E', r.phE)
+      ]
+    };
+  },
+  formulas: [
+    { label: 'Ph-E reach', text: 'R = (2 R1 + R0) / 3,  X = (2 X1 + X0) / 3' },
+    { label: 'Reach angle', text: 'atan( X / R )' },
+    { label: 'Lower line', text: 'through the origin at 360 - max phase angle' },
+    { label: 'Upper line', text: 'through the origin at min phase angle' }
+  ],
+  notes: [
+    'Each line in the Omicron table is a point plus an angle, entered as a line in the Cartesian zone editor.',
+    'Changed from the spreadsheet: the Ph-Ph reach-parallel line now uses the max resistive reach (the original used the min in the test table and the max in the graph), and both plots use the max phase angle for the lower line (the original graph fixed it at 45°).',
+    'Not carried over: the tilt-angle table, which referenced empty cells and was not finished. Send me the intended tilt behaviour and I will add it.'
+  ]
+});
+</script>
+</body>
+</html>

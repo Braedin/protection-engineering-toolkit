@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Differential characteristic - Protection Toolkit</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-base="../">
+<main class="wrap" id="app"></main>
+<script src="../js/core.js"></script>
+<script src="../js/calcs/differential-curve.js"></script>
+<script>
+TK.mount({
+  id: 'differential-curve',
+  title: 'Differential characteristic (SEL-787)',
+  subtitle: 'Dual-slope operate / restraint curve breakpoints and line equations.',
+  source: 'Differential Curve SEL 787.xlsx',
+  inputs: [
+    { group: 'Settings' },
+    { id: 'o87p', label: 'O87P (minimum pickup)', unit: 'xTAP', value: 0.3, minExclusive: 0 },
+    { id: 'u87p', label: 'U87P (unrestrained pickup)', unit: 'xTAP', value: 8, minExclusive: 0 },
+    { id: 'irs1', label: 'IRS1 (slope 1 limit)', unit: 'xTAP', value: 3, minExclusive: 0 },
+    { id: 'slp1', label: 'SLP1', unit: '%', value: 25, minExclusive: 0 },
+    { id: 'slp2', label: 'SLP2', unit: '%', value: 50, minExclusive: 0 }
+  ],
+  calc: function (v) {
+    var r = TK.calcs.differentialCurve.compute(v);
+    var L = r.lines;
+    var pts = [[L[0].x1, L[0].y1], [L[0].x2, L[0].y2], [L[1].x2, L[1].y2], [L[2].x2, L[2].y2]];
+    var xEnd = Math.max(r.x3 * 1.15, r.x3 + 1);
+    return {
+      warnings: r.warnings,
+      sections: [
+        { title: 'Breakpoints', rows: [
+          { label: 'Line 1 to Line 2 break (restraint)', value: r.x1, unit: 'xTAP', dp: 3 },
+          { label: 'Operate current at IRS1', value: r.yIrs, unit: 'xTAP', dp: 3 },
+          { label: 'Line 3 x-intercept (h)', hint: 'Line 3: y = SLP2 (x - h)', value: r.h, unit: 'xTAP', dp: 3 },
+          { label: 'Line 3 reaches U87P at', value: r.x3, unit: 'xTAP', dp: 3 }
+        ] },
+        { title: 'Line segments', table: {
+          head: ['Line', 'x from', 'x to', 'y from', 'y to'], dp: [0, 3, 3, 3, 3],
+          rows: L.map(function (l) { return [l.name, l.x1, l.x2, l.y1, l.y2]; }) } },
+        { title: 'Characteristic', plot: {
+          title: 'Differential characteristic',
+          xlabel: 'Restraint current (xTAP)', ylabel: 'Operate current (xTAP)', include: [[0, 0]],
+          series: [
+            { name: 'Operate boundary', pts: pts.concat([[xEnd, v.u87p]]), markers: false },
+            { name: 'Breakpoints', pts: pts, markers: true, color: 'var(--c2)', width: 0.01 }
+          ] } }
+      ]
+    };
+  },
+  formulas: [
+    { label: 'Line 1', text: 'y = O87P,  0 to O87P / SLP1' },
+    { label: 'Line 2', text: 'y = SLP1 x,  up to x = IRS1' },
+    { label: 'Line 3', text: 'y = SLP2 (x - h),  h = IRS1 - SLP1 x IRS1 / SLP2' },
+    { label: 'End of Line 3', text: 'x = U87P / SLP2 + h' }
+  ],
+  notes: ['Operating points above the boundary trip. Above U87P the element is unrestrained.']
+});
+</script>
+</body>
+</html>

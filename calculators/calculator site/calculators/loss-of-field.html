@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loss of field - Protection Toolkit</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-base="../">
+<main class="wrap" id="app"></main>
+<script src="../js/core.js"></script>
+<script src="../js/calcs/loss-of-field.js"></script>
+<script>
+var M = { showIf: { id: 'mode', eq: 'manual' } };
+function mv(o) { for (var k in M) o[k] = M[k]; return o; }
+TK.mount({
+  id: 'loss-of-field',
+  title: 'Loss of field (40) mho settings',
+  subtitle: 'Two-zone offset mho characteristic from generator data, with Omicron test values and an R-X plot.',
+  source: 'Loss of Field Calculations.xlsx',
+  inputs: [
+    { group: 'Generator' },
+    { id: 'kv', label: 'Rated voltage (L-L)', unit: 'kV', value: 20, minExclusive: 0 },
+    { id: 'mva', label: 'Rated power', unit: 'MVA', value: 492, minExclusive: 0 },
+    { id: 'pt', label: 'PT ratio', unit: ': 1', value: 167, minExclusive: 0 },
+    { id: 'ct', label: 'CT ratio', unit: ': 1', value: 3600, minExclusive: 0 },
+    { id: 'xd', label: 'Xd', unit: 'pu', value: 1.1888, minExclusive: 0 },
+    { id: 'xdp', label: "X'd", unit: 'pu', value: 0.20577, minExclusive: 0 },
+    { group: 'Zone settings' },
+    { id: 'mode', label: 'Zone sizes', type: 'select', numeric: false, value: 'calc',
+      options: [{ value: 'calc', label: "Calculate from Xd and X'd" }, { value: 'manual', label: 'Enter diameter and offset' }] },
+    mv({ id: 'z1d', label: 'Zone 1 diameter', unit: 'Ω sec', value: 17.53, minExclusive: 0 }),
+    mv({ id: 'z1o', label: 'Zone 1 offset', unit: 'Ω sec', value: -1.8, hint: 'Top of the circle on the X axis. Negative = below the R axis.' }),
+    mv({ id: 'z2d', label: 'Zone 2 diameter', unit: 'Ω sec', value: 20.83, minExclusive: 0 }),
+    mv({ id: 'z2o', label: 'Zone 2 offset', unit: 'Ω sec', value: -1.8 }),
+    { id: 'z1t', label: 'Zone 1 trip time', unit: 's', value: 0.1, min: 0 },
+    { id: 'z2t', label: 'Zone 2 trip time', unit: 's', value: 0.5, min: 0 }
+  ],
+  presets: [
+    { name: '492 MVA unit (calculated)', values: { kv: 20, mva: 492, pt: 167, ct: 3600, xd: 1.1888, xdp: 0.20577, mode: 'calc', z1t: 0.1, z2t: 0.5 } },
+    { name: '15.8 MVA test settings (manual)', values: { kv: 11, mva: 15.829, pt: 167, ct: 3600, xd: 1.18, xdp: 0.2, mode: 'manual', z1d: 114.7, z1o: -12.6, z2d: 149.1, z2o: -12.6, z1t: 0.5, z2t: 3 } }
+  ],
+  calc: function (v) {
+    var r = TK.calcs.lossOfField.compute(v);
+    function oz(z) { return z.omicron; }
+    return {
+      warnings: r.warnings,
+      sections: [
+        { title: 'Base values', rows: [
+          { label: 'Base impedance ZB', value: r.zb, unit: 'Ω sec', dp: 3 },
+          { label: 'VNOM', value: r.vnom, unit: 'V sec (L-L)', dp: 2 },
+          { label: 'INOM', value: r.inom, unit: 'A sec', dp: 4 }
+        ] },
+        { title: 'Relay settings', table: {
+          head: ['', 'Diameter (Ω)', 'Offset (Ω)', 'Diameter (pu)', 'Offset (pu)', 'Time (s)'], dp: [0, 3, 3, 3, 3, 2],
+          rows: [
+            ['Zone 1', r.z1.diameter, r.z1.offset, r.z1.pu, r.z1.offsetPu, r.z1.time],
+            ['Zone 2', r.z2.diameter, r.z2.offset, r.z2.pu, r.z2.offsetPu, r.z2.time]
+          ] } },
+        { title: 'Omicron test values', table: {
+          head: ['', '|Z| (Ω)', 'Phi (°)', 'Radius (Ω)', 'Start (°)', 'End (°)'], dp: [0, 3, 0, 3, 0, 0],
+          rows: [
+            ['Zone 1', oz(r.z1).z, oz(r.z1).phi, oz(r.z1).radius, oz(r.z1).start, oz(r.z1).end],
+            ['Zone 2', oz(r.z2).z, oz(r.z2).phi, oz(r.z2).radius, oz(r.z2).start, oz(r.z2).end]
+          ] } },
+        { title: 'R-X characteristic', plot: {
+          title: 'Loss of field mho zones', xlabel: 'R (Ω secondary)', ylabel: 'X (Ω secondary)', equal: true, include: [[0, 0]],
+          series: [
+            { name: 'Zone 1 (' + v.z1t + ' s)', pts: r.z1.points, fill: true },
+            { name: 'Zone 2 (' + v.z2t + ' s)', pts: r.z2.points, fill: true }
+          ] } }
+      ]
+    };
+  },
+  formulas: [
+    { label: 'Base impedance', text: 'ZB = kV^2 / MVA x CT ratio / PT ratio' },
+    { label: 'Zone 1', text: "diameter = 1.0 pu (ZB), offset = -X'd x ZB / 2" },
+    { label: 'Zone 2', text: 'diameter = Xd x ZB, offset = Zone 1 offset' },
+    { label: 'Omicron', text: '|Z| = |offset - diameter/2|, radius = diameter/2, phi = 270 (centre below R axis)' }
+  ],
+  notes: [
+    'Changed from the spreadsheet: phi returned the text "IDK" for a non-negative offset. It now gives 90° when the circle centre is above the R axis.',
+    'The spreadsheet had two copies of this sheet, one with typed test values (Xd of 118 and X\'d of 20, apparently percentages) and one calculated. They are now one page: pick the manual mode or a preset. Xd and X\'d must be in per-unit.'
+  ]
+});
+</script>
+</body>
+</html>

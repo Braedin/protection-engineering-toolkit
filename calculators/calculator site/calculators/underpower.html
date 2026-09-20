@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Underpower test current - Protection Toolkit</title>
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body data-base="../">
+<main class="wrap" id="app"></main>
+<script src="../js/core.js"></script>
+<script src="../js/calcs/underpower.js"></script>
+<script>
+TK.mount({
+  id: 'underpower',
+  title: 'Underpower test current',
+  subtitle: 'Secondary current to inject for a kW setting, and the kW represented by a given current.',
+  source: 'Underpower Current.xlsx',
+  inputs: [
+    { group: 'Instrument transformers' },
+    { id: 'vtPri', label: 'VT primary (L-L)', unit: 'V', value: 3300, minExclusive: 0 },
+    { id: 'vtSec', label: 'VT secondary (L-L)', unit: 'V', value: 110, minExclusive: 0 },
+    { id: 'ctr', label: 'CT ratio', unit: ': 1', value: 100, minExclusive: 0, hint: 'Primary amps per secondary amp.' },
+    { group: 'Motor' },
+    { id: 'flc', label: 'Full load current', unit: 'A', value: 140, minExclusive: 0 },
+    { id: 'pf', label: 'Power factor for the test', value: 1, minExclusive: 0, max: 1, hint: '1.0 = current in phase with voltage.' },
+    { group: 'Relay settings' },
+    { id: 'pickupKw', label: 'Pickup setting', unit: 'kW', value: 80, minExclusive: 0 },
+    { id: 'tripKw', label: 'Trip setting', unit: 'kW', value: 100, minExclusive: 0 },
+    { group: 'Check a current (secondary, balanced or not)' },
+    { id: 'ia', label: 'Ia', unit: 'A', value: 0.139, min: 0 },
+    { id: 'ib', label: 'Ib', unit: 'A', value: 0.139, min: 0 },
+    { id: 'ic', label: 'Ic', unit: 'A', value: 0.139, min: 0 }
+  ],
+  calc: function (v) {
+    var r = TK.calcs.underpower.compute(v);
+    function table(name, s) {
+      return { title: name + ' (' + s.kw + ' kW): test points', table: {
+        head: ['% of setting', 'kW', 'I secondary (A)', 'I primary (A)', '% FLC'], dp: [0, 2, 4, 2, 1],
+        rows: s.table.map(function (t) { return [t.pct + '%', t.kw, t.iSec, t.iPri, t.pctFlc]; }) } };
+    }
+    return {
+      warnings: r.warnings,
+      sections: [
+        { title: 'Injection current at the setting', rows: [
+          { label: 'Pickup setting', hint: r.pickup.kw + ' kW', value: r.pickup.iSec, unit: 'A sec', dp: 4, strong: true },
+          { label: 'Trip setting', hint: r.trip.kw + ' kW', value: r.trip.iSec, unit: 'A sec', dp: 4, strong: true },
+          { label: 'Voltage to apply (L-N)', value: r.vLNsec, unit: 'V sec', dp: 3 },
+          { label: 'VT ratio', value: r.vtRatio, unit: ': 1', dp: 2 }
+        ] },
+        { title: 'Power for the entered current', rows: [
+          { label: 'Power', value: r.kw, unit: 'kW', dp: 2, strong: true },
+          { label: 'Versus pickup setting', value: r.kw < r.pickup.kw ? 'BELOW' : 'ABOVE', status: r.kw < r.pickup.kw ? 'warn' : 'info' },
+          { label: 'Versus trip setting', value: r.kw < r.trip.kw ? 'BELOW' : 'ABOVE', status: r.kw < r.trip.kw ? 'warn' : 'info' }
+        ] },
+        table('Pickup', r.pickup),
+        table('Trip', r.trip)
+      ]
+    };
+  },
+  formulas: [
+    { label: 'Power', text: 'P = sum( V(L-N, primary) x I(primary) x pf ) / 1000' },
+    { label: 'Current to inject', text: 'I sec = P x 1000 / (sqrt3 x V(L-L, primary) x pf) / CT ratio' }
+  ],
+  notes: [
+    'Assumes rated voltage is applied and current is in phase for pf = 1.',
+    'Changed from the spreadsheet: settings are numbers instead of text ("80kW"), voltages come from the VT ratio, and the sheet\'s typed 1905 V becomes 3300 / sqrt3 = 1905.26 V, so results differ by about 0.01 kW.'
+  ]
+});
+</script>
+</body>
+</html>

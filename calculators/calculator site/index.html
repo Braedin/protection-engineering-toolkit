@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Protection Toolkit</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body data-base="">
+<main class="wrap" id="app">
+  <div class="page-title">
+    <h1>Protection engineering calculators</h1>
+    <p>Relay setting and test-value calculators for commissioning and design. Inputs are saved in your browser between visits.</p>
+  </div>
+  <input class="search" id="q" type="search" placeholder="Search calculators" aria-label="Search calculators">
+  <div id="list"></div>
+</main>
+<script src="js/registry.js"></script>
+<script src="js/core.js"></script>
+<script>
+(function () {
+  var h = TK.h, list = document.getElementById('list'), q = document.getElementById('q');
+  var head = h('header', { class: 'site-header' }, h('div', { class: 'wrap' }, h('a', { class: 'brand', href: 'index.html', html: 'Protection <span>Toolkit</span>' })));
+  document.body.insertBefore(head, document.body.firstChild);
+  function render() {
+    var term = q.value.trim().toLowerCase(), groups = {}, order = [];
+    TK.registry.forEach(function (c) {
+      if (term && (c.title + ' ' + c.desc + ' ' + c.group).toLowerCase().indexOf(term) < 0) return;
+      if (!groups[c.group]) { groups[c.group] = []; order.push(c.group); }
+      groups[c.group].push(c);
+    });
+    list.textContent = '';
+    if (!order.length) list.appendChild(h('p', { class: 'empty' }, 'No calculators match.'));
+    order.forEach(function (g) {
+      list.appendChild(h('div', { class: 'group-h' }, g));
+      list.appendChild(h('div', { class: 'cards' }, groups[g].map(function (c) {
+        return h('a', { class: 'card', href: c.href }, h('h3', null, c.title), h('p', null, c.desc));
+      })));
+    });
+  }
+  q.addEventListener('input', render);
+  render();
+})();
+</script>
+</body>
+</html>
