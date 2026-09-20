@@ -1,4 +1,4 @@
-// ===================== Protection Engineering Toolkit v0.9.3 =====================
+// ===================== Protection Engineering Toolkit v0.9.4 =====================
 const TOOL_GROUPS = [
   { label: 'Overcurrent', tools: [ {id:'tcc', label:'TCC Plotter'} ] },
   { label: 'System Analysis', tools: [ {id:'symcomp', label:'Symmetrical Components'}, {id:'fault', label:'Fault Level Calculator'} ] },
@@ -871,13 +871,30 @@ function calcCurrentImbalance(){
 }
 
 // ===================== SEL-787 Differential Pickup =====================
-function ctcFactor787(n){ if (n%2===1) return Math.sqrt(3); if ([2,4,8,10].includes(n)) return 3; if ([6,12].includes(n)) return 1.5; return NaN; }
+// SEL-787 WnCTC compensation matrices, row 1 only (the Phase-A / I1WnC element), from the SEL-787
+// instruction manual "Complete List of Compensation Matrices (m = 1 to 12)": I1WnC = (a.IA + b.IB + c.IC) / div.
+// m=0 is the identity matrix (no compensation).
+const SEL787_CTC = {
+  0:  {a:1,  b:0,  c:0,  div:1},
+  1:  {a:1,  b:-1, c:0,  div:Math.sqrt(3)},
+  2:  {a:1,  b:-2, c:1,  div:3},
+  3:  {a:0,  b:-1, c:1,  div:Math.sqrt(3)},
+  4:  {a:-1, b:-1, c:2,  div:3},
+  5:  {a:-1, b:0,  c:1,  div:Math.sqrt(3)},
+  6:  {a:-2, b:1,  c:1,  div:3},
+  7:  {a:-1, b:1,  c:0,  div:Math.sqrt(3)},
+  8:  {a:-1, b:2,  c:-1, div:3},
+  9:  {a:0,  b:1,  c:-1, div:Math.sqrt(3)},
+  10: {a:1,  b:1,  c:-2, div:3},
+  11: {a:1,  b:0,  c:-1, div:Math.sqrt(3)},
+  12: {a:2,  b:-1, c:-1, div:3},
+};
 function renderDiffPickup787(container){
   const ctcOptions = Array.from({length:13}, (_,i)=>`<option value="${i}" ${i===12?'selected':''}>${i}</option>`).join('');
   const ctcOptionsW2 = Array.from({length:13}, (_,i)=>`<option value="${i}" ${i===11?'selected':''}>${i}</option>`).join('');
   container.innerHTML = `
     <h2>SEL-787 Differential Pickup <span class="std-badge">CT-Compensated Test Values</span></h2>
-    <p class="tool-desc">O87P pickup in secondary amps (Ph-Ph and Ph-E) with CT compensation, plus values to inject at the relay for a differential pickup test.</p>
+    <p class="tool-desc">O87P pickup in secondary amps (Ph-Ph and Ph-E) with CT compensation, plus values to inject at the relay for a differential pickup test. Uses the full SEL-787 WnCTC compensation matrix (row 1, the Phase-A element) for every code 0–12, not a simplified per-code multiplier.</p>
     <div class="grid">
       <div class="card">
         <div class="compact-form">
@@ -891,10 +908,12 @@ function renderDiffPickup787(container){
           <div class="field"><label>W2CTC (LV CT compensation)</label><select id="dp7W2ctc">${ctcOptionsW2}</select></div>
         </div>
         <hr style="border-color:var(--border);margin:14px 0;">
+        <p class="tool-desc" style="margin-bottom:8px;">Return current magnitude on the other two phases, for the Injection test (entered as a positive magnitude — applied internally at 180°, i.e. as a negative value, per SEL test convention).</p>
         <div class="compact-form">
-          <div class="field"><label>HV side: Ib at 180° (mA)</label><input id="dp7DIb" type="number" value="-100" step="1"></div>
-          <div class="field"><label>HV side: Ic at 180° (mA)</label><input id="dp7DIc" type="number" value="-100" step="1"></div>
-          <div class="field"><label>LV side: Ic at 180° (mA)</label><input id="dp7SIc" type="number" value="-100" step="1"></div>
+          <div class="field"><label>HV: Ib return (mA)</label><input id="dp7HvIb" type="number" value="100" step="1" min="0"></div>
+          <div class="field"><label>HV: Ic return (mA)</label><input id="dp7HvIc" type="number" value="100" step="1" min="0"></div>
+          <div class="field"><label>LV: Ib return (mA)</label><input id="dp7LvIb" type="number" value="0" step="1" min="0"></div>
+          <div class="field"><label>LV: Ic return (mA)</label><input id="dp7LvIc" type="number" value="100" step="1" min="0"></div>
         </div>
         <div class="results" id="dp7Results"></div>
       </div>
@@ -905,59 +924,60 @@ function renderDiffPickup787(container){
     </div>
     <div class="card" style="margin-top:16px;"><div class="results centered" id="dp7Injection"></div></div>
   `;
-  ['dp7Mva','dp7O87p','dp7Vp','dp7Vs','dp7CtrHv','dp7CtrLv','dp7W1ctc','dp7W2ctc','dp7DIb','dp7DIc','dp7SIc'].forEach(id => { const el=document.getElementById(id); el.addEventListener('input', calcDiffPickup787); el.addEventListener('change', calcDiffPickup787); });
+  ['dp7Mva','dp7O87p','dp7Vp','dp7Vs','dp7CtrHv','dp7CtrLv','dp7W1ctc','dp7W2ctc','dp7HvIb','dp7HvIc','dp7LvIb','dp7LvIc'].forEach(id => { const el=document.getElementById(id); el.addEventListener('input', calcDiffPickup787); el.addEventListener('change', calcDiffPickup787); });
   calcDiffPickup787();
   renderFormulaBlock(container, 'Reference formulas', [
     String.raw`I = \dfrac{\text{MVA}\times10^6}{\sqrt3\,V}, \quad \text{Ph-Ph pickup} = \dfrac{O87P\cdot I}{\text{CT ratio}}`,
-    String.raw`\text{Ph-E (pure 1}\phi\text{-G)} = \text{Ph-Ph}\times\text{mult(CTC)}`
+    String.raw`I_{1,WnC} = \dfrac{a\cdot I_A + b\cdot I_B + c\cdot I_C}{\text{div}} \quad \text{(row 1 of the WnCTC compensation matrix)}`
   ]);
 }
 function calcDiffPickup787(){
   const mva = safeNum(document.getElementById('dp7Mva').value, 15); const o87p = safeNum(document.getElementById('dp7O87p').value, 0.3);
   const vp = safeNum(document.getElementById('dp7Vp').value, 11000); const vs = safeNum(document.getElementById('dp7Vs').value, 3450);
   const ctrHv = safeNum(document.getElementById('dp7CtrHv').value, 1000); const ctrLv = safeNum(document.getElementById('dp7CtrLv').value, 3000);
-  const w1ctc = safeNum(document.getElementById('dp7W1ctc').value, 12); const w2ctc = safeNum(document.getElementById('dp7W2ctc').value, 11);
-  const dIb = safeNum(document.getElementById('dp7DIb').value, -100); const dIc = safeNum(document.getElementById('dp7DIc').value, -100); const sIc = safeNum(document.getElementById('dp7SIc').value, -100);
+  const w1ctc = Math.round(safeNum(document.getElementById('dp7W1ctc').value, 12)); const w2ctc = Math.round(safeNum(document.getElementById('dp7W2ctc').value, 11));
+  const hvIb = safeNum(document.getElementById('dp7HvIb').value, 100); const hvIc = safeNum(document.getElementById('dp7HvIc').value, 100);
+  const lvIb = safeNum(document.getElementById('dp7LvIb').value, 0); const lvIc = safeNum(document.getElementById('dp7LvIc').value, 100);
   const SQRT3 = Math.sqrt(3);
   const ip = (mva*1e6)/(SQRT3*vp); const is = (mva*1e6)/(SQRT3*vs);
-  const f1 = ctcFactor787(w1ctc), f2 = ctcFactor787(w2ctc);
-  let warnHtml = '';
-  if (isNaN(f1)) warnHtml += `<div class="result-flag flag-warn">⚠ W1CTC = ${w1ctc} has no 1-phase-to-earth multiplier in the lookup table.</div>`;
-  if (isNaN(f2)) warnHtml += `<div class="result-flag flag-warn">⚠ W2CTC = ${w2ctc} has no 1-phase-to-earth multiplier in the lookup table.</div>`;
+  const m1 = SEL787_CTC[w1ctc], m2 = SEL787_CTC[w2ctc];
   const hvLL = o87p*ip/ctrHv; const lvLL = o87p*is/ctrLv;
-  // Ph-E pickup = Ph-Ph pickup x CTC factor on BOTH sides, for a pure single-phase-to-ground
-  // injection (IB = IC = 0). Derived from the actual CTC matrix equations and cross-checked
-  // against real spreadsheet cells for an independent transformer: HV CTC(12) gives
-  // Icomp = (2*IA - IB - IC)/3, so IA = 1.5 x base at IB=IC=0; LV CTC(11) gives
-  // Icomp = (IA - IC)/sqrt(3) (IB does not appear), so IA = sqrt(3) x base at IC=0.
-  // A field test that trips at a LOWER current than this (e.g. ~PU L-L on HV) is not a pure
-  // single-phase test — it means a return current was also flowing in the other two phases,
-  // which is exactly the separate "-100 mA offset" scenario computed in the Injection section below.
-  const hvLE = hvLL*f1; const lvLE = lvLL*f2;
   const hvLLmA = hvLL*1000, lvLLmA = lvLL*1000;
-  const deltaIa = hvLLmA*f1 + (dIb+dIc)/2; const starIa = lvLLmA*f2 + sIc;
-  if (!(w1ctc===12 && w2ctc===11)) warnHtml += `<div class="result-flag flag-warn">⚠ The Ph-E and injection formulas are derived from the specific W1CTC=12 / W2CTC=11 matrix equations. Verify the matrix structure before trusting other CTC codes.</div>`;
+
+  // Ph-E (pure single-phase-to-ground, other two phases = 0): I1 = a.IA/div = base -> IA = base.div/a.
+  // Ph-E is undefined (N/A) when a=0 (WnCTC = 3 or 9): the Phase-A element doesn't respond to IA at all.
+  const hvLE = m1.a !== 0 ? hvLL*m1.div/Math.abs(m1.a) : NaN;
+  const lvLE = m2.a !== 0 ? lvLL*m2.div/Math.abs(m2.a) : NaN;
+
+  // Injection test: IB, IC applied at 180 deg (i.e. as -hvIb, -hvIc), solve a.IA + b.(-hvIb) + c.(-hvIc) = base.div for IA.
+  const deltaIa = m1.a !== 0 ? (hvLLmA*m1.div + m1.b*hvIb + m1.c*hvIc)/m1.a : NaN;
+  const starIa = m2.a !== 0 ? (lvLLmA*m2.div + m2.b*lvIb + m2.c*lvIc)/m2.a : NaN;
+
+  let warnHtml = '';
+  if (m1.a === 0) warnHtml += `<div class="result-flag flag-warn">⚠ W1CTC = ${w1ctc}: the Phase-A element does not depend on IA at all for this code — a Phase-A-only injection can never trip it. Test via Ib or Ic instead, or use the general matrix directly.</div>`;
+  if (m2.a === 0) warnHtml += `<div class="result-flag flag-warn">⚠ W2CTC = ${w2ctc}: the Phase-A element does not depend on IA at all for this code — a Phase-A-only injection can never trip it. Test via Ib or Ic instead, or use the general matrix directly.</div>`;
   document.getElementById('dp7Results').innerHTML = `
     <div class="result-line"><span>HV winding rated current (Ip)</span><b>${ip.toFixed(2)} A</b></div>
     <div class="result-line"><span>LV winding rated current (Is)</span><b>${is.toFixed(2)} A</b></div>
-    <div class="result-line"><span>Ph-E multiplier, W1CTC</span><b>${isNaN(f1)?'—':f1.toFixed(4)}</b></div>
-    <div class="result-line"><span>Ph-E multiplier, W2CTC</span><b>${isNaN(f2)?'—':f2.toFixed(4)}</b></div>
+    <div class="result-line"><span>W1CTC row-1 matrix (I1 = a·IA + b·IB + c·IC)</span><b>a=${m1.a}, b=${m1.b}, c=${m1.c}, div=${m1.div.toFixed(4)}</b></div>
+    <div class="result-line"><span>W2CTC row-1 matrix (I1 = a·IA + b·IB + c·IC)</span><b>a=${m2.a}, b=${m2.b}, c=${m2.c}, div=${m2.div.toFixed(4)}</b></div>
     ${warnHtml}
-    <div class="note">Ph-E pickup values below are for a <b>pure</b> single-phase-to-ground injection (other two phases at zero) — the more realistic representation of an actual earth fault. The separate Injection section further down instead computes the Phase A current needed to trip when the other two phases carry a fixed −100 mA return current, a common bench-test convention that trips at a different (typically lower) current than the pure single-phase case.</div>
+    <div class="note">Ph-E pickup values in the tables are for a <b>pure</b> single-phase-to-ground injection (other two phases at zero) — the more realistic representation of an actual earth fault. The Injection section further down instead computes the Phase A current needed to trip with a fixed return current on the other two phases (entered above, applied at 180°), a common bench-test convention that trips at a different current than the pure single-phase case. A negative injection result means the polarity needs to be reversed (inject at 180° instead of 0°) to reach trip.</div>
   `;
   function sideTable(title, ll, le, llTol, leTol){
+    const leCell = isNaN(le) ? ['N/A','N/A','N/A','N/A'] : [le.toFixed(4), (le*1000).toFixed(1), ((le-leTol)*1000).toFixed(1), ((le+leTol)*1000).toFixed(1)];
     return `<thead><tr><th colspan="5">${title}</th></tr><tr><th></th><th>Pickup (A)</th><th>Pickup (mA)</th><th>-5% (mA)</th><th>+5% (mA)</th></tr></thead><tbody>
       <tr><td>Ph-Ph</td><td>${ll.toFixed(4)}</td><td>${(ll*1000).toFixed(1)}</td><td>${((ll-llTol)*1000).toFixed(1)}</td><td>${((ll+llTol)*1000).toFixed(1)}</td></tr>
-      <tr><td>Ph-E</td><td>${le.toFixed(4)}</td><td>${(le*1000).toFixed(1)}</td><td>${((le-leTol)*1000).toFixed(1)}</td><td>${((le+leTol)*1000).toFixed(1)}</td></tr>
+      <tr><td>Ph-E</td><td>${leCell[0]}</td><td>${leCell[1]}</td><td>${leCell[2]}</td><td>${leCell[3]}</td></tr>
     </tbody>`;
   }
-  document.getElementById('dp7HvTable').innerHTML = sideTable('HV side pickup (secondary)', hvLL, hvLE, hvLL*0.05, hvLE*0.05);
-  document.getElementById('dp7LvTable').innerHTML = sideTable('LV side pickup (secondary)', lvLL, lvLE, lvLL*0.05, lvLE*0.05);
+  document.getElementById('dp7HvTable').innerHTML = sideTable('HV side pickup (secondary)', hvLL, hvLE, hvLL*0.05, isNaN(hvLE)?0:hvLE*0.05);
+  document.getElementById('dp7LvTable').innerHTML = sideTable('LV side pickup (secondary)', lvLL, lvLE, lvLL*0.05, isNaN(lvLE)?0:lvLE*0.05);
   document.getElementById('dp7Injection').innerHTML = `
     <div class="result-line"><span>HV side: Ph-Ph pickup</span><b>${hvLLmA.toFixed(1)} mA</b></div>
-    <div class="result-line"><span>HV side: Ia pickup (inject at 0°)</span><b>${deltaIa.toFixed(1)} mA</b></div>
+    <div class="result-line"><span>HV side: Ia pickup (inject at 0°)</span><b>${isNaN(deltaIa)?'N/A':deltaIa.toFixed(1)+' mA'}</b></div>
     <div class="result-line"><span>LV side: Ph-Ph pickup</span><b>${lvLLmA.toFixed(1)} mA</b></div>
-    <div class="result-line"><span>LV side: Ia pickup (inject at 0°)</span><b>${starIa.toFixed(1)} mA</b></div>
+    <div class="result-line"><span>LV side: Ia pickup (inject at 0°)</span><b>${isNaN(starIa)?'N/A':starIa.toFixed(1)+' mA'}</b></div>
   `;
 }
 
