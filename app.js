@@ -1,4 +1,4 @@
-// ===================== Protection Engineering Toolkit v0.6.0 =====================
+// ===================== Protection Engineering Toolkit v0.8.0 =====================
 const TOOL_GROUPS = [
   { label: 'Overcurrent', tools: [ {id:'tcc', label:'TCC Plotter'} ] },
   { label: 'System Analysis', tools: [ {id:'symcomp', label:'Symmetrical Components'}, {id:'fault', label:'Fault Level Calculator'} ] },
@@ -10,6 +10,111 @@ const TOOL_GROUPS = [
 ];
 const TOOLS = TOOL_GROUPS.flatMap(g => g.tools);
 function safeNum(val, fallback=0){ const n = parseFloat(val); return isNaN(n) ? fallback : n; }
+function safeChart(ctx, config){
+  if (typeof Chart === 'undefined') return null;
+  try { return new Chart(ctx, config); }
+  catch(e){ console.warn('Chart render failed:', e); return null; }
+}
+
+// ===================== Formula helper (KaTeX) =====================
+function renderFormulaBlock(container, title, formulas){
+  if (!container) return;
+  const block = document.createElement('div');
+  block.className = 'card formula-block';
+  block.style.marginTop = '16px';
+  const h = document.createElement('h3');
+  h.textContent = title; h.style.marginTop = '0'; h.style.fontSize = '0.95rem'; h.style.color = 'var(--text-dim)';
+  block.appendChild(h);
+  formulas.forEach(tex => {
+    const d = document.createElement('div'); d.style.margin = '10px 0';
+    if (window.katex) { try { katex.render(tex, d, { throwOnError:false, displayMode:true }); } catch(e){ d.textContent = tex; } }
+    else d.textContent = tex;
+    block.appendChild(d);
+  });
+  container.appendChild(block);
+}
+
+// ===================== Save / Load framework (per-tool, localStorage) =====================
+const SAVE_KEY_PREFIX = 'pet.saves.';
+const NO_SAVE_TOOLS = new Set(['arcflash', 'references']);
+const SAVE_HANDLERS = {};
+
+function loadSaves(toolId){
+  try { const raw = localStorage.getItem(SAVE_KEY_PREFIX + toolId); return raw ? JSON.parse(raw) : []; }
+  catch(e){ return []; }
+}
+function writeSaves(toolId, list){
+  try { localStorage.setItem(SAVE_KEY_PREFIX + toolId, JSON.stringify(list)); }
+  catch(e){ /* storage unavailable or full — save/load degrades silently */ }
+}
+function genericCollect(panel){
+  const data = {};
+  panel.querySelectorAll('select[id]').forEach(el => { data[el.id] = el.value; });
+  panel.querySelectorAll('[data-savegroup]').forEach(group => {
+    const active = group.querySelector('.active[data-value]');
+    if (active) data['group:' + group.dataset.savegroup] = active.dataset.value;
+  });
+  panel.querySelectorAll('input[id]').forEach(el => { data[el.id] = el.type === 'checkbox' ? el.checked : el.value; });
+  return data;
+}
+function genericApply(panel, data){
+  panel.querySelectorAll('select[id]').forEach(el => {
+    if (data[el.id] === undefined) return;
+    el.value = data[el.id];
+    el.dispatchEvent(new Event('change', { bubbles:true }));
+  });
+  panel.querySelectorAll('[data-savegroup]').forEach(group => {
+    const key = 'group:' + group.dataset.savegroup;
+    if (data[key] === undefined) return;
+    const btn = group.querySelector(`[data-value="${CSS.escape(String(data[key]))}"]`);
+    if (btn) btn.click();
+  });
+  panel.querySelectorAll('input[id]').forEach(el => {
+    if (data[el.id] === undefined) return;
+    if (el.type === 'checkbox') el.checked = data[el.id]; else el.value = data[el.id];
+    el.dispatchEvent(new Event('input', { bubbles:true }));
+    el.dispatchEvent(new Event('change', { bubbles:true }));
+  });
+}
+function getSaveHandler(toolId){ return SAVE_HANDLERS[toolId] || { collect: genericCollect, apply: genericApply }; }
+function attachSaveLoadUI(panel, toolId){
+  if (NO_SAVE_TOOLS.has(toolId)) return;
+  if (panel.querySelector('.save-load-card')) return;
+  const card = document.createElement('div');
+  card.className = 'card save-load-card';
+  card.innerHTML = `
+    <div class="save-load-header">Saved setups</div>
+    <div class="save-load-row"><input type="text" class="saveNameInput" placeholder="Name this setup…"><button type="button" class="btn saveBtn">Save current</button></div>
+    <div class="save-list"></div>
+  `;
+  panel.appendChild(card);
+  const nameInput = card.querySelector('.saveNameInput');
+  const listEl = card.querySelector('.save-list');
+  const handler = getSaveHandler(toolId);
+  function refreshList(){
+    const saves = loadSaves(toolId);
+    listEl.innerHTML = saves.length ? saves.map((s,i) => `
+      <div class="save-item">
+        <span class="save-item-name">${s.name}</span>
+        <span class="save-item-date">${new Date(s.ts).toLocaleDateString()}</span>
+        <button type="button" class="btn-icon loadSaveBtn" data-idx="${i}">Load</button>
+        <button type="button" class="btn-icon deleteSaveBtn" data-idx="${i}">✕</button>
+      </div>`).join('') : '<div class="note">No saved setups yet.</div>';
+    listEl.querySelectorAll('.loadSaveBtn').forEach(btn => { btn.onclick = () => { const saves = loadSaves(toolId); const entry = saves[btn.dataset.idx]; if (entry) handler.apply(panel, entry.data); }; });
+    listEl.querySelectorAll('.deleteSaveBtn').forEach(btn => { btn.onclick = () => { const saves = loadSaves(toolId); saves.splice(btn.dataset.idx, 1); writeSaves(toolId, saves); refreshList(); }; });
+  }
+  card.querySelector('.saveBtn').onclick = () => {
+    const name = nameInput.value.trim() || `Setup ${new Date().toLocaleString()}`;
+    const saves = loadSaves(toolId);
+    saves.push({ name, ts: Date.now(), data: handler.collect(panel) });
+    writeSaves(toolId, saves);
+    nameInput.value = '';
+    refreshList();
+  };
+  refreshList();
+}
+
+// ===================== TCC Plotter =====================
 const CURVES = {
   'IEC-SI':{name:'IEC Standard Inverse (SI)',A:0.14,p:0.02,B:0},
   'IEC-VI':{name:'IEC Very Inverse (VI)',A:13.5,p:1.0,B:0},
@@ -25,7 +130,7 @@ let activeCurves = [ {key:'IEC-SI', pickup:100, tms:0.1, ctRatio:1, id:cryptoId(
 function cryptoId(){ return Math.random().toString(36).slice(2,9); }
 function renderTCC(container){
   container.innerHTML = `
-    <h2>Time-Current Curve (TCC) Plotter <span class="std-badge">IEC 60255-151 / IEEE C37.112</span></h2>
+    <h2>Time-Current Curve (TCC) Plotter <span class="std-badge">AS/NZS 60255.151 / IEEE C37.112</span></h2>
     <p class="tool-desc">Plot IDMT overcurrent relay curves, adjust pickup current and TMS/TD, and read off operating time at any multiple of pickup to check coordination margins between devices. Each curve can be displayed in secondary (relay) current or referred to the primary system current using its CT ratio.</p>
     <div class="grid">
       <div class="card">
@@ -46,6 +151,9 @@ function renderTCC(container){
   document.getElementById('tccAxisMode').onchange = updateTCCChart;
   renderCurveEditor();
   updateTCCChart();
+  renderFormulaBlock(container, 'Reference formula', [
+    String.raw`t = TMS\left(\dfrac{A}{(I/I_s)^p - 1} + B\right)`
+  ]);
 }
 function renderCurveEditor(){
   const el = document.getElementById('curveEditor');
@@ -86,10 +194,21 @@ function updateTCCChart(){
     });
   }
   if (tccChart) tccChart.destroy();
-  tccChart = new Chart(ctx, { type:'line', data:{datasets}, options:{ responsive:true, parsing: false, scales:{ x:{type:'logarithmic', title:{display:true,text:axisMode==='primary' ? 'Primary Current (A)' : 'Secondary Current (A)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}}, y:{type:'logarithmic', title:{display:true,text:'Operating Time (s)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}} }, plugins:{ legend:{labels:{color:'#e7ecf7', font:{size:10}}}, tooltip:{mode:'nearest'} } } });
+  tccChart = safeChart(ctx, { type:'line', data:{datasets}, options:{ responsive:true, parsing: false, scales:{ x:{type:'logarithmic', title:{display:true,text:axisMode==='primary' ? 'Primary Current (A)' : 'Secondary Current (A)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}}, y:{type:'logarithmic', title:{display:true,text:'Operating Time (s)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}} }, plugins:{ legend:{labels:{color:'#e7ecf7', font:{size:10}}}, tooltip:{mode:'nearest'} } } });
   const evalEl = document.getElementById('evalResults');
   if (evalCurrent > 0){ evalEl.innerHTML = activeCurves.map(c => { const refMultiplier = axisMode==='primary' ? c.ctRatio : 1; const effectivePickup = c.pickup * refMultiplier; const ratio = evalCurrent / effectivePickup; const t = curveTime(c.key, ratio, c.tms); return `<div class="result-line"><span>${CURVES[c.key].name} @ ${evalCurrent}A</span><b>${t!==null ? t.toFixed(3)+' s' : 'below pickup'}</b></div>`; }).join(''); } else { evalEl.innerHTML = ''; }
 }
+SAVE_HANDLERS.tcc = {
+  collect(){ return { axisMode: document.getElementById('tccAxisMode').value, evalCurrent: document.getElementById('evalCurrent').value, curves: activeCurves.map(c => ({key:c.key, pickup:c.pickup, tms:c.tms, ctRatio:c.ctRatio})) }; },
+  apply(panel, data){
+    if (Array.isArray(data.curves) && data.curves.length){ activeCurves = data.curves.map(c => Object.assign({}, c, {id: cryptoId()})); renderCurveEditor(); }
+    if (data.axisMode !== undefined) document.getElementById('tccAxisMode').value = data.axisMode;
+    if (data.evalCurrent !== undefined) document.getElementById('evalCurrent').value = data.evalCurrent;
+    updateTCCChart();
+  }
+};
+
+// ===================== Symmetrical Components =====================
 function complexMul(a, b){ return {re: a.re*b.re - a.im*b.im, im: a.re*b.im + a.im*b.re}; }
 function complexAdd(a, b){ return {re: a.re+b.re, im: a.im+b.im}; }
 function polarToRect(mag, angDeg){ const r = angDeg*Math.PI/180; return {re: mag*Math.cos(r), im: mag*Math.sin(r)}; }
@@ -97,21 +216,32 @@ function rectToPolar(c){ return {mag: Math.sqrt(c.re*c.re+c.im*c.im), ang: Math.
 const a_op = polarToRect(1,120); const a2_op = polarToRect(1,240);
 function renderSymComp(container){
   container.innerHTML = `
-    <h2>Symmetrical Components Calculator <span class="std-badge">Fortescue / IEC 60909</span></h2>
+    <h2>Symmetrical Components Calculator <span class="std-badge">Fortescue / AS/NZS 60909</span></h2>
     <p class="tool-desc">Convert unbalanced three-phase phasors (Ia, Ib, Ic or Va, Vb, Vc) to positive, negative and zero sequence components, or vice versa. The "Before" diagram shows your input quantities; "After" shows the calculated result.</p>
     <div class="grid">
       <div class="card"><div class="field"><label>Conversion direction</label><select id="symDir"><option value="p2s">Phase → Sequence</option><option value="s2p">Sequence → Phase</option></select></div><div id="symInputs"></div><div class="results" id="symResults"></div></div>
-      <div class="card"><h3 style="margin-top:0;font-size:0.95rem;color:var(--text-dim);">Before (input)</h3><canvas id="symBeforeCanvas" width="380" height="380" style="max-width:100%;"></canvas><h3 style="font-size:0.95rem;color:var(--text-dim);margin-top:16px;">After (result)</h3><canvas id="symAfterCanvas" width="380" height="380" style="max-width:100%;"></canvas></div>
+      <div class="card">
+        <div class="symcomp-canvases">
+          <div><h3 class="canvas-label" id="symBeforeLabel">Before (input)</h3><canvas id="symBeforeCanvas" width="380" height="380" style="max-width:100%;"></canvas></div>
+          <div><h3 class="canvas-label" id="symAfterLabel">After (result)</h3><canvas id="symAfterCanvas" width="380" height="380" style="max-width:100%;"></canvas></div>
+        </div>
+      </div>
     </div>
   `;
   document.getElementById('symDir').onchange = renderSymInputs;
   renderSymInputs();
+}
+function updateSymLabels(){
+  const dir = document.getElementById('symDir').value;
+  document.getElementById('symBeforeLabel').textContent = dir === 'p2s' ? 'Before (Phase)' : 'Before (Sequence)';
+  document.getElementById('symAfterLabel').textContent = dir === 'p2s' ? 'After (Sequence)' : 'After (Phase)';
 }
 function renderSymInputs(){
   const dir = document.getElementById('symDir').value; const el = document.getElementById('symInputs');
   if (dir === 'p2s'){ el.innerHTML = `<div class="field"><label>Phase A: magnitude / angle (deg)</label><div class="row2"><input id="s1m" type="number" value="100"><input id="s1a" type="number" value="0"></div></div><div class="field"><label>Phase B: magnitude / angle (deg)</label><div class="row2"><input id="s2m" type="number" value="100"><input id="s2a" type="number" value="-120"></div></div><div class="field"><label>Phase C: magnitude / angle (deg)</label><div class="row2"><input id="s3m" type="number" value="100"><input id="s3a" type="number" value="120"></div></div>`; }
   else { el.innerHTML = `<div class="field"><label>Zero seq: magnitude / angle (deg)</label><div class="row2"><input id="s1m" type="number" value="0"><input id="s1a" type="number" value="0"></div></div><div class="field"><label>Positive seq: magnitude / angle (deg)</label><div class="row2"><input id="s2m" type="number" value="100"><input id="s2a" type="number" value="0"></div></div><div class="field"><label>Negative seq: magnitude / angle (deg)</label><div class="row2"><input id="s3m" type="number" value="0"><input id="s3a" type="number" value="0"></div></div>`; }
   ['s1m','s1a','s2m','s2a','s3m','s3a'].forEach(id => { document.getElementById(id).oninput = calcSymComp; });
+  updateSymLabels();
   calcSymComp();
 }
 function drawPhasorDiagram(canvasId, phasors){
@@ -144,10 +274,12 @@ function calcSymComp(){
     drawPhasorDiagram('symAfterCanvas', [ {mag:pa.mag, ang:pa.ang, color:'#4fb0ff', label:'A'}, {mag:pb.mag, ang:pb.ang, color:'#ffb74f', label:'B'}, {mag:pc.mag, ang:pc.ang, color:'#4fd88a', label:'C'} ]);
   }
 }
+
+// ===================== CT Knee-Point & Saturation =====================
 let ctChart = null;
 function renderCTSat(container){
   container.innerHTML = `
-    <h2>CT Knee-Point &amp; Saturation Calculator <span class="std-badge">IEC 61869-2 / AS/NZS 61869</span></h2>
+    <h2>CT Knee-Point &amp; Saturation Calculator <span class="std-badge">AS/NZS 61869-2</span></h2>
     <p class="tool-desc">Estimate required CT knee-point voltage for protection-class current transformers and check against a nameplate value.</p>
     <div class="grid">
       <div class="card">
@@ -159,11 +291,14 @@ function renderCTSat(container){
         <div class="field"><label>Dimensioning / safety factor K</label><select id="ctK"><option value="1">1.0 (no margin)</option><option value="1.5">1.5 (moderate DC offset margin)</option><option value="2" selected>2.0 (typical differential / REF)</option></select></div>
         <div class="field"><label>Nameplate knee-point voltage Vk (V) — optional</label><input id="ctVkActual" type="number" placeholder="e.g. 150"></div>
       </div>
-      <div class="chart-wrap"><canvas id="ctCanvas"></canvas><div id="ctResults" class="results"></div><div class="diagram-note">V_k ≥ K × (I_fault,sec) × (R_CT + R_L + R_relay). Chart shows an idealised excitation curve — not a manufacturer-tested characteristic.</div></div>
+      <div class="chart-wrap"><canvas id="ctCanvas"></canvas><div id="ctResults" class="results centered"></div><div class="diagram-note">V_k ≥ K × (I_fault,sec) × (R_CT + R_L + R_relay). Chart shows an idealised excitation curve — not a manufacturer-tested characteristic.</div></div>
     </div>
   `;
   ['ctPrim','ctSec','ctIf','ctRct','ctRl','ctRr','ctK','ctVkActual'].forEach(id => { document.getElementById(id).addEventListener('input', calcCTSat); document.getElementById(id).addEventListener('change', calcCTSat); });
   calcCTSat();
+  renderFormulaBlock(container, 'Reference formula', [
+    String.raw`V_k \geq K \times I_{fault,sec} \times (R_{CT} + R_L + R_{relay})`
+  ]);
 }
 function calcCTSat(){
   const prim = safeNum(document.getElementById('ctPrim').value, 1); const sec = safeNum(document.getElementById('ctSec').value, 1); const If = safeNum(document.getElementById('ctIf').value); const Rct = safeNum(document.getElementById('ctRct').value); const Rl = safeNum(document.getElementById('ctRl').value); const Rr = safeNum(document.getElementById('ctRr').value); const K = safeNum(document.getElementById('ctK').value, 2);
@@ -176,8 +311,10 @@ function calcCTSat(){
   const linPoints = []; for (let i=0; i<=knee_I; i+=knee_I/20){ linPoints.push({x:i, y: (vkPlot/knee_I)*i}); }
   const satPoints = []; const maxI = knee_I*8; for (let i=knee_I; i<=maxI; i+=(maxI-knee_I)/30){ const y = vkPlot + (vkPlot*0.15) * Math.log(1 + (i-knee_I)/(knee_I*0.5)); satPoints.push({x:i, y}); }
   const ctx = document.getElementById('ctCanvas'); if (ctChart) ctChart.destroy();
-  ctChart = new Chart(ctx, { type:'line', data:{ datasets:[ {label:'Excitation curve (indicative)', data:[...linPoints, ...satPoints], borderColor:'#4fb0ff', backgroundColor:'transparent', borderWidth:2, pointRadius:0, parsing:false}, {label:'Knee point', data:[{x:knee_I, y:vkPlot}], borderColor:'#ffb74f', backgroundColor:'#ffb74f', pointRadius:7, showLine:false, type:'scatter', parsing:false}, {label:'Operating fault point', data:[{x:IfSec, y: IfSec*(Rct+Rl+Rr)}], borderColor:'#ff6b6b', backgroundColor:'#ff6b6b', pointRadius:7, showLine:false, type:'scatter', parsing:false} ] }, options:{ responsive:true, parsing:false, scales:{ x:{title:{display:true,text:'Exciting Current (A)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}}, y:{title:{display:true,text:'Secondary Voltage (V)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}} }, plugins:{legend:{labels:{color:'#e7ecf7'}}} } });
+  ctChart = safeChart(ctx, { type:'line', data:{ datasets:[ {label:'Excitation curve (indicative)', data:[...linPoints, ...satPoints], borderColor:'#4fb0ff', backgroundColor:'transparent', borderWidth:2, pointRadius:0, parsing:false}, {label:'Knee point', data:[{x:knee_I, y:vkPlot}], borderColor:'#ffb74f', backgroundColor:'#ffb74f', pointRadius:7, showLine:false, type:'scatter', parsing:false}, {label:'Operating fault point', data:[{x:IfSec, y: IfSec*(Rct+Rl+Rr)}], borderColor:'#ff6b6b', backgroundColor:'#ff6b6b', pointRadius:7, showLine:false, type:'scatter', parsing:false} ] }, options:{ responsive:true, parsing:false, scales:{ x:{title:{display:true,text:'Exciting Current (A)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}}, y:{title:{display:true,text:'Secondary Voltage (V)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}} }, plugins:{legend:{labels:{color:'#e7ecf7'}}} } });
 }
+
+// ===================== Transformer Differential (87T) =====================
 let diffChart = null;
 function renderDiff87(container){
   container.innerHTML = `
@@ -207,40 +344,69 @@ function updateDiffChart(){
   const points = []; const steps = 200; for (let i=0; i<=steps; i++){ const ir = (maxIr/steps)*i; points.push({x:ir, y:diffCharacteristic(ir,pickup,s1,bp1,s2)}); }
   const thresholdAtTest = diffCharacteristic(testIr,pickup,s1,bp1,s2); const willOperate = testId > thresholdAtTest;
   const ctx = document.getElementById('diffCanvas'); if (diffChart) diffChart.destroy();
-  diffChart = new Chart(ctx, { type:'line', data:{ datasets:[ {label:'Operate boundary', data:points, borderColor:'#4fb0ff', backgroundColor:'rgba(79,176,255,0.08)', fill:true, pointRadius:0, borderWidth:2, parsing:false}, {label:'Measured operating point', data:[{x:testIr,y:testId}], borderColor: willOperate?'#ff6b6b':'#4fd88a', backgroundColor: willOperate?'#ff6b6b':'#4fd88a', pointRadius:7, showLine:false, type:'scatter', parsing:false} ] }, options:{ responsive:true, parsing:false, scales:{ x:{type:'linear', min:0, max:maxIr, title:{display:true,text:'Restraint Current Ir (pu)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}}, y:{type:'linear', min:0, title:{display:true,text:'Differential Current Id (pu)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}} }, plugins:{legend:{labels:{color:'#e7ecf7'}}} } });
+  diffChart = safeChart(ctx, { type:'line', data:{ datasets:[ {label:'Operate boundary', data:points, borderColor:'#4fb0ff', backgroundColor:'rgba(79,176,255,0.08)', fill:true, pointRadius:0, borderWidth:2, parsing:false}, {label:'Measured operating point', data:[{x:testIr,y:testId}], borderColor: willOperate?'#ff6b6b':'#4fd88a', backgroundColor: willOperate?'#ff6b6b':'#4fd88a', pointRadius:7, showLine:false, type:'scatter', parsing:false} ] }, options:{ responsive:true, parsing:false, scales:{ x:{type:'linear', min:0, max:maxIr, title:{display:true,text:'Restraint Current Ir (pu)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}}, y:{type:'linear', min:0, title:{display:true,text:'Differential Current Id (pu)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'}} }, plugins:{legend:{labels:{color:'#e7ecf7'}}} } });
   document.getElementById('dResults').innerHTML = `<div class="result-line"><span>Operate threshold at measured Ir=${testIr}</span><b>${thresholdAtTest.toFixed(3)} pu</b></div><div class="result-flag ${willOperate?'flag-warn':'flag-good'}">${willOperate ? '⚡ Measured point is ABOVE characteristic — relay would OPERATE' : '✓ Measured point is below characteristic — relay RESTRAINED'}</div>`;
 }
+
+// ===================== Fault Level Calculator =====================
 let currentFaultType = '3ph';
+const FAULT_LABELS = { '3ph': '3-PHASE FAULT', '2ph': 'PHASE-PHASE FAULT', '1ph': 'SINGLE PHASE-EARTH FAULT', '2phe': 'PHASE-PHASE-EARTH FAULT' };
 function renderFault(container){
   container.innerHTML = `
-    <h2>Fault Level Calculator <span class="std-badge">IEC 60909 (simplified)</span></h2>
-    <p class="tool-desc">Quick fault level estimate from system voltage and source/transformer impedance. Select a fault type to see the approximate current for that condition.</p>
+    <h2>Fault Level Calculator <span class="std-badge">AS/NZS 60909 (simplified)</span></h2>
+    <p class="tool-desc">Fault level estimate from system voltage and impedance to the fault point. Optionally combine an upstream network fault level through a transformer to the fault-side bus, per the IEC/AS 60909 equivalent-source method.</p>
     <div class="grid">
       <div class="card">
         <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:8px;">Fault type</label>
-        <div class="fault-type-grid"><button class="fault-type-btn active" data-type="3ph">3-Phase</button><button class="fault-type-btn" data-type="2ph">Phase-Phase</button><button class="fault-type-btn" data-type="1ph">Single Phase-Earth</button><button class="fault-type-btn" data-type="2phe">Phase-Phase-Earth</button></div>
-        <div class="field"><label>Nominal system voltage, line-line (kV)</label><input id="fVn" type="number" value="11" step="0.1"></div>
-        <div class="field"><label>Source / transformer impedance to fault (%Z, positive-seq)</label><input id="fZpc" type="number" value="6" step="0.1"></div>
-        <div class="field"><label>Transformer / source rated MVA</label><input id="fMva" type="number" value="10" step="0.1"></div>
+        <div class="fault-type-grid" data-savegroup="faultType"><button class="fault-type-btn active" data-value="3ph">3-Phase</button><button class="fault-type-btn" data-value="2ph">Phase-Phase</button><button class="fault-type-btn" data-value="1ph">Single Phase-Earth</button><button class="fault-type-btn" data-value="2phe">Phase-Phase-Earth</button></div>
+        <div class="checkrow"><input type="checkbox" id="fUseUpstream"><label for="fUseUpstream" style="margin:0;">Include upstream network source impedance</label></div>
+        <div class="field"><label>System voltage at fault point, line-line (kV)</label><input id="fVn" type="number" value="11" step="0.1"></div>
+        <div class="field"><label id="fZpcLabel">Source / transformer impedance to fault (%Z, positive-seq)</label><input id="fZpc" type="number" value="6" step="0.1"></div>
+        <div class="field"><label id="fMvaLabel">Transformer / source rated MVA</label><input id="fMva" type="number" value="10" step="0.1"></div>
+        <div class="field" id="fXrWrap"><label>X/R ratio (for asymmetry factor)</label><input id="fXr" type="number" value="15" step="0.1"></div>
+        <div id="fUpstreamFields" style="display:none;">
+          <div class="field"><label>Upstream network fault level Ssc (MVA)</label><input id="fSsc" type="number" value="500" step="1"></div>
+          <div class="field"><label>Upstream nominal voltage, line-line (kV)</label><input id="fVup" type="number" value="66" step="0.1"></div>
+          <div class="field"><label>Upstream X/R ratio</label><input id="fXrUp" type="number" value="15" step="0.1"></div>
+          <div class="field"><label>Transformer X/R ratio</label><input id="fXrT" type="number" value="20" step="0.1"></div>
+        </div>
         <div class="field"><label>Zero-sequence impedance ratio Z0/Z1 (for earth faults)</label><input id="fZ0Ratio" type="number" value="1.5" step="0.1"></div>
-        <div class="field"><label>Voltage factor c (IEC 60909)</label><select id="fC"><option value="1.1">c=1.1 (max fault, LV/MV)</option><option value="1.0">c=1.0 (nominal)</option><option value="0.95">c=0.95 (min fault)</option></select></div>
-        <div class="field"><label>X/R ratio (for asymmetry factor)</label><input id="fXr" type="number" value="15" step="0.1"></div>
+        <div class="field"><label>Voltage factor c (IEC/AS 60909)</label><select id="fC"><option value="1.1">c=1.1 (max fault, LV/MV)</option><option value="1.0">c=1.0 (nominal)</option><option value="0.95">c=0.95 (min fault)</option></select></div>
       </div>
-      <div class="card"><canvas id="sldCanvas" width="560" height="360" style="max-width:100%;"></canvas><div id="fResults" class="results"></div></div>
+      <div class="card"><canvas id="sldCanvas" width="560" height="360" style="max-width:100%;"></canvas><div id="fResults" class="results centered"></div></div>
     </div>
-    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">I''k formulas (IEC 60909, simplified): 3-phase = c·Vn/(√3·Z1). Phase-phase = c·Vn/(2·Z1). Single phase-earth = √3·c·Vn/(2·Z1+Z0). Phase-phase-earth uses combined parallel sequence networks. Base impedance Zbase = Vn²/MVA; peak asymmetry factor κ ≈ 1.02 + 0.98·e<sup>(-3·R/X)</sup>. Diagram is a simplified single-source SLD for visualisation only — verify against a full network fault study for protection grading &amp; equipment rating (AS/NZS 3000, AS 62271).</p></div>
+    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">I''k formulas (AS/NZS 60909, simplified): 3-phase = c·Vn/(√3·Z1). Phase-phase = c·Vn/(2·Z1). Single phase-earth = √3·c·Vn/(2·Z1+Z0). Phase-phase-earth uses combined parallel sequence networks. With upstream source included: the network feeder is modelled as Zk = c·Vup²/Ssc, split into R and X via the given X/R ratio, referred to the fault-side voltage by (Vn/Vup)², and added in series (complex R+jX) with the transformer's own impedance (also split via its own X/R ratio). This assumes the source connects directly to the transformer primary with no intervening line/cable impedance, and uses a single Z0/Z1 ratio for the combined zero-sequence network. Peak asymmetry factor κ ≈ 1.02 + 0.98·e<sup>(-3·R/X)</sup> using the combined X/R. Diagram is a simplified single-source SLD for visualisation only — verify against a full network fault study for protection grading &amp; equipment rating (AS/NZS 3000, AS 2067).</p></div>
   `;
-  document.querySelectorAll('.fault-type-btn').forEach(btn => { btn.onclick = () => { document.querySelectorAll('.fault-type-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); currentFaultType = btn.dataset.type; calcFault(); }; });
-  ['fVn','fZpc','fMva','fZ0Ratio','fC','fXr'].forEach(id => { document.getElementById(id).oninput = calcFault; });
+  container.querySelectorAll('.fault-type-btn').forEach(btn => { btn.onclick = () => { container.querySelectorAll('.fault-type-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); currentFaultType = btn.dataset.value; calcFault(); }; });
+  const upstreamCheckbox = document.getElementById('fUseUpstream');
+  const upstreamFields = document.getElementById('fUpstreamFields');
+  const xrWrap = document.getElementById('fXrWrap');
+  const zpcLabel = document.getElementById('fZpcLabel');
+  const mvaLabel = document.getElementById('fMvaLabel');
+  function syncUpstreamVisibility(){
+    const on = upstreamCheckbox.checked;
+    upstreamFields.style.display = on ? '' : 'none';
+    xrWrap.style.display = on ? 'none' : '';
+    zpcLabel.textContent = on ? 'Transformer impedance %Z (positive-seq)' : 'Source / transformer impedance to fault (%Z, positive-seq)';
+    mvaLabel.textContent = on ? 'Transformer rated MVA' : 'Transformer / source rated MVA';
+  }
+  upstreamCheckbox.addEventListener('change', () => { syncUpstreamVisibility(); calcFault(); });
+  syncUpstreamVisibility();
+  ['fVn','fZpc','fMva','fZ0Ratio','fC','fXr','fSsc','fVup','fXrUp','fXrT'].forEach(id => { const el = document.getElementById(id); el.addEventListener('input', calcFault); el.addEventListener('change', calcFault); });
   calcFault();
+  renderFormulaBlock(container, 'Reference formulas', [
+    String.raw`I''_{k,3\phi} = \dfrac{c \cdot V_n}{\sqrt{3}\,Z_1}`,
+    String.raw`Z_{k,\text{source}} = \dfrac{c \cdot V_{up}^2}{S_k''}`
+  ]);
 }
-function drawSLD(vn, mva, zpc, ikA, ipeak, faultLabel){
+function drawSLD(vn, mva, zpc, ikA, ipeak, faultLabel, upstreamLabel){
   const canvas = document.getElementById('sldCanvas'); if (!canvas) return; const ctx = canvas.getContext('2d'); const w = canvas.width, h = canvas.height; ctx.clearRect(0,0,w,h);
   ctx.strokeStyle = '#9fb0cf'; ctx.fillStyle = '#e7ecf7'; ctx.font = '13px Segoe UI'; ctx.lineWidth = 2;
   const busY = 60; const srcX = 100, srcTopY = 20;
   ctx.beginPath(); ctx.arc(srcX, srcTopY, 16, 0, 2*Math.PI); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(srcX-8, srcTopY); ctx.bezierCurveTo(srcX-8,srcTopY-8, srcX,srcTopY-8, srcX,srcTopY); ctx.bezierCurveTo(srcX,srcTopY+8, srcX+8,srcTopY+8, srcX+8,srcTopY); ctx.stroke();
   ctx.fillText('Source', srcX-24, srcTopY-24);
+  if (upstreamLabel){ ctx.font = '11px Segoe UI'; ctx.fillStyle = '#9fb0cf'; ctx.fillText(upstreamLabel, srcX+22, srcTopY+4); ctx.font = '13px Segoe UI'; ctx.fillStyle = '#e7ecf7'; }
   ctx.beginPath(); ctx.moveTo(srcX, srcTopY+16); ctx.lineTo(srcX, busY); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(60, busY); ctx.lineTo(w-60, busY); ctx.lineWidth = 4; ctx.strokeStyle = '#4fb0ff'; ctx.stroke(); ctx.lineWidth = 2; ctx.strokeStyle = '#9fb0cf'; ctx.fillStyle = '#4fb0ff'; ctx.font = 'bold 13px Segoe UI'; ctx.fillText(`Bus (${vn} kV)`, 60, busY-12);
   const txX = w/2; ctx.strokeStyle = '#9fb0cf'; ctx.fillStyle = '#e7ecf7'; ctx.font = '13px Segoe UI'; ctx.beginPath(); ctx.moveTo(txX, busY); ctx.lineTo(txX, busY+40); ctx.stroke();
@@ -253,45 +419,88 @@ function drawSLD(vn, mva, zpc, ikA, ipeak, faultLabel){
   const boxY = faultY + 90; ctx.fillStyle = 'rgba(255,107,107,0.1)'; ctx.fillRect(30, boxY, w-60, 70); ctx.strokeStyle = '#ff6b6b'; ctx.lineWidth = 1; ctx.strokeRect(30, boxY, w-60, 70);
   ctx.fillStyle = '#ff6b6b'; ctx.font = 'bold 14px Segoe UI'; ctx.fillText(faultLabel, 44, boxY+22); ctx.font = 'bold 16px Segoe UI'; ctx.fillText(`I''k = ${ikA.toFixed(2)} kA`, 44, boxY+42); ctx.font = '13px Segoe UI'; ctx.fillStyle = '#9fb0cf'; ctx.fillText(`ip = ${ipeak.toFixed(2)} kA`, 44, boxY+60);
 }
-const FAULT_LABELS = { '3ph': '3-PHASE FAULT', '2ph': 'PHASE-PHASE FAULT', '1ph': 'SINGLE PHASE-EARTH FAULT', '2phe': 'PHASE-PHASE-EARTH FAULT' };
 function calcFault(){
-  const Vn = safeNum(document.getElementById('fVn').value, 11); const Zpc = safeNum(document.getElementById('fZpc').value, 6); const Mva = safeNum(document.getElementById('fMva').value, 10); const Z0Ratio = safeNum(document.getElementById('fZ0Ratio').value, 1.5); const c = safeNum(document.getElementById('fC').value, 1.1); const xr = safeNum(document.getElementById('fXr').value, 15);
-  const Zbase = (Vn*Vn)/Mva; const Z1 = (Zpc/100)*Zbase; const Z0 = Z1 * Z0Ratio; const Z2 = Z1;
+  const Vn = safeNum(document.getElementById('fVn').value, 11); const Zpc = safeNum(document.getElementById('fZpc').value, 6); const Mva = safeNum(document.getElementById('fMva').value, 10); const Z0Ratio = safeNum(document.getElementById('fZ0Ratio').value, 1.5); const c = safeNum(document.getElementById('fC').value, 1.1);
+  const useUpstream = document.getElementById('fUseUpstream').checked;
+  let Z1, xrCombined, upstreamHtml, upstreamLabel = null;
+  if (useUpstream){
+    const Ssc = safeNum(document.getElementById('fSsc').value, 500); const Vup = safeNum(document.getElementById('fVup').value, 66); const xrUp = safeNum(document.getElementById('fXrUp').value, 15); const xrT = safeNum(document.getElementById('fXrT').value, 20);
+    const ZsUpMag = Ssc > 0 ? (c*Vup*Vup)/Ssc : 0;
+    const XsUp = ZsUpMag * (xrUp/Math.sqrt(1+xrUp*xrUp)); const RsUp = xrUp > 0 ? XsUp/xrUp : ZsUpMag;
+    const referFactor = Vup > 0 ? Math.pow(Vn/Vup, 2) : 0;
+    const Rs = RsUp*referFactor, Xs = XsUp*referFactor;
+    const ZbaseT = Mva > 0 ? (Vn*Vn)/Mva : 0; const Z1Tmag = (Zpc/100)*ZbaseT;
+    const Xt = Z1Tmag * (xrT/Math.sqrt(1+xrT*xrT)); const Rt = xrT > 0 ? Xt/xrT : Z1Tmag;
+    const R1 = Rs+Rt, X1 = Xs+Xt;
+    Z1 = Math.sqrt(R1*R1+X1*X1);
+    xrCombined = R1 > 0 ? X1/R1 : xrT;
+    upstreamLabel = `Ssc = ${Ssc} MVA`;
+    upstreamHtml = `<div class="result-line"><span>Upstream source impedance (referred)</span><b>${Math.sqrt(Rs*Rs+Xs*Xs).toFixed(4)} Ω</b></div><div class="result-line"><span>Transformer impedance</span><b>${Z1Tmag.toFixed(4)} Ω</b></div><div class="result-line"><span>Combined X/R ratio</span><b>${xrCombined.toFixed(2)}</b></div>`;
+  } else {
+    const Zbase = Mva > 0 ? (Vn*Vn)/Mva : 0; Z1 = (Zpc/100)*Zbase; xrCombined = safeNum(document.getElementById('fXr').value, 15);
+    upstreamHtml = `<div class="result-line"><span>Base impedance (Zbase)</span><b>${Zbase.toFixed(4)} Ω</b></div>`;
+  }
+  const Z0 = Z1*Z0Ratio; const Z2 = Z1;
   let IkA;
   if (currentFaultType === '3ph'){ IkA = (c*Vn*1000) / (Math.sqrt(3)*Z1) / 1000; }
   else if (currentFaultType === '2ph'){ IkA = (c*Vn*1000) / (2*Z1) / 1000; }
   else if (currentFaultType === '1ph'){ IkA = (Math.sqrt(3)*c*Vn*1000) / (2*Z1+Z0) / 1000; }
   else { const Ea = c*Vn*1000/Math.sqrt(3); const I1 = Ea / (Z1 + (Z2*Z0)/(Z2+Z0)); const I2 = -I1 * Z0/(Z2+Z0); const I0 = -I1 * Z2/(Z2+Z0); const aOp = polarToRect(1,120); const a2Op = polarToRect(1,240); const Ib = complexAdd({re:I0,im:0}, complexAdd(complexMul(a2Op,{re:I1,im:0}), complexMul(aOp,{re:I2,im:0}))); IkA = rectToPolar(Ib).mag / 1000; }
-  const IkA_base = Mva/(Math.sqrt(3)*Vn); const kappa = 1.02 + 0.98*Math.exp(-3/xr); const ipeak = kappa * Math.sqrt(2) * IkA;
-  document.getElementById('fResults').innerHTML = `<div class="result-line"><span>Base impedance (Zbase)</span><b>${Zbase.toFixed(4)} Ω</b></div><div class="result-line"><span>Positive-seq impedance Z1</span><b>${Z1.toFixed(4)} Ω</b></div><div class="result-line"><span>Zero-seq impedance Z0</span><b>${Z0.toFixed(4)} Ω</b></div><div class="result-line"><span>Rated full-load current</span><b>${IkA_base.toFixed(3)} kA</b></div><div class="result-line"><span>Fault current I''k (${FAULT_LABELS[currentFaultType]})</span><b>${IkA.toFixed(3)} kA</b></div><div class="result-line"><span>Asymmetry factor κ</span><b>${kappa.toFixed(3)}</b></div><div class="result-line"><span>Peak fault current ip</span><b>${ipeak.toFixed(3)} kA</b></div>`;
-  drawSLD(Vn, Mva, Zpc, IkA, ipeak, FAULT_LABELS[currentFaultType]);
+  const IkA_base = Vn > 0 ? Mva/(Math.sqrt(3)*Vn) : 0; const kappa = 1.02 + 0.98*Math.exp(-3/xrCombined); const ipeak = kappa * Math.sqrt(2) * IkA;
+  document.getElementById('fResults').innerHTML = `${upstreamHtml}<div class="result-line"><span>Positive-seq impedance Z1 (total)</span><b>${Z1.toFixed(4)} Ω</b></div><div class="result-line"><span>Zero-seq impedance Z0</span><b>${Z0.toFixed(4)} Ω</b></div><div class="result-line"><span>Rated full-load current</span><b>${IkA_base.toFixed(3)} kA</b></div><div class="result-line"><span>Fault current I''k (${FAULT_LABELS[currentFaultType]})</span><b>${IkA.toFixed(3)} kA</b></div><div class="result-line"><span>Asymmetry factor κ</span><b>${kappa.toFixed(3)}</b></div><div class="result-line"><span>Peak fault current ip</span><b>${ipeak.toFixed(3)} kA</b></div>`;
+  drawSLD(Vn, Mva, Zpc, IkA, ipeak, FAULT_LABELS[currentFaultType], upstreamLabel);
 }
+
+// ===================== Transformer FLC & Fault Current =====================
 function renderTxfmr(container){
   container.innerHTML = `
-    <h2>Transformer FLC &amp; Fault Current <span class="std-badge">IEC 60076 / IEC 60909 (simplified)</span></h2>
+    <h2>Transformer FLC &amp; Fault Current <span class="std-badge">AS/NZS 60076.1 / AS/NZS 60909 (simplified)</span></h2>
     <p class="tool-desc">Full-load current and expected fault current from transformer nameplate data.</p>
     <div class="grid">
       <div class="card">
+        <div class="field" style="margin-bottom:14px;">
+          <label>Transformer type</label>
+          <div class="fault-type-grid" data-savegroup="xfmrType" style="grid-template-columns:1fr 1fr;">
+            <button type="button" class="fault-type-btn active" data-value="3ph">Three-Phase</button>
+            <button type="button" class="fault-type-btn" data-value="1ph">Single-Phase</button>
+          </div>
+        </div>
         <div class="compact-form">
-          <div class="field"><label>Rated power (MVA)</label><input id="tMva" type="number" value="10" step="0.1"></div>
+          <div class="field"><label>Rated power</label><div class="row2"><input id="tMva" type="number" value="10" step="0.1"><select id="tMvaUnit"><option value="MVA">MVA</option><option value="kVA">kVA</option></select></div></div>
           <div class="field"><label>Impedance %Z</label><input id="tZpc" type="number" value="8" step="0.1"></div>
-          <div class="field"><label>Primary kV</label><input id="tVp" type="number" value="66" step="0.1"></div>
-          <div class="field"><label>Secondary kV</label><input id="tVs" type="number" value="11" step="0.1"></div>
+          <div class="field"><label>Primary</label><div class="row2"><input id="tVp" type="number" value="66" step="0.1"><select id="tVpUnit"><option value="kV">kV</option><option value="V">V</option></select></div></div>
+          <div class="field"><label>Secondary</label><div class="row2"><input id="tVs" type="number" value="11" step="0.1"><select id="tVsUnit"><option value="kV">kV</option><option value="V">V</option></select></div></div>
         </div>
       </div>
-      <div class="card"><table class="ref-table" id="tResultsTable"></table></div>
+      <div class="card"><div class="results centered" id="tResults"></div></div>
     </div>
-    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">FLC = MVA×10<sup>6</sup> / (√3×kV×10<sup>3</sup>). Fault current = FLC / (%Z/100).</p></div>
   `;
-  ['tMva','tVp','tVs','tZpc'].forEach(id => { document.getElementById(id).addEventListener('input', calcTxfmr); document.getElementById(id).addEventListener('change', calcTxfmr); });
+  container.querySelectorAll('.fault-type-btn').forEach(btn => { btn.onclick = () => { container.querySelectorAll('.fault-type-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); calcTxfmr(); }; });
+  ['tMva','tZpc','tVp','tVs','tMvaUnit','tVpUnit','tVsUnit'].forEach(id => { const el = document.getElementById(id); el.addEventListener('input', calcTxfmr); el.addEventListener('change', calcTxfmr); });
   calcTxfmr();
+  renderFormulaBlock(container, 'Reference formulas', [
+    String.raw`\text{FLC}_{3\phi} = \dfrac{S}{\sqrt{3}\,V_{LL}}, \quad \text{FLC}_{1\phi} = \dfrac{S}{V}`,
+    String.raw`I''_k = \dfrac{\text{FLC}}{Z_{pu}}`
+  ]);
 }
 function calcTxfmr(){
-  const mva = safeNum(document.getElementById('tMva').value, 10); const vp = safeNum(document.getElementById('tVp').value, 66); const vs = safeNum(document.getElementById('tVs').value, 11); const zpc = safeNum(document.getElementById('tZpc').value, 8);
-  const flcPrimary = (mva*1e6) / (Math.sqrt(3)*vp*1e3); const flcSecondary = (mva*1e6) / (Math.sqrt(3)*vs*1e3);
-  const faultPrimary = flcPrimary / (zpc/100); const faultSecondary = flcSecondary / (zpc/100);
-  let rows = `<thead><tr><th>Quantity</th><th>Primary (${vp} kV)</th><th>Secondary (${vs} kV)</th></tr></thead><tbody><tr><td>Full-load current</td><td>${flcPrimary.toFixed(1)} A</td><td>${flcSecondary.toFixed(1)} A</td></tr><tr><td>Fault current</td><td>${faultPrimary.toFixed(0)} A (${(faultPrimary/1000).toFixed(2)} kA)</td><td>${faultSecondary.toFixed(0)} A (${(faultSecondary/1000).toFixed(2)} kA)</td></tr>`;
-  rows += `</tbody>`; document.getElementById('tResultsTable').innerHTML = rows;
+  const panel = document.getElementById('panel-txfmr');
+  const type = panel.querySelector('.fault-type-btn.active').dataset.value;
+  const mvaUnit = document.getElementById('tMvaUnit').value; const vpUnit = document.getElementById('tVpUnit').value; const vsUnit = document.getElementById('tVsUnit').value;
+  let mva = safeNum(document.getElementById('tMva').value, 10); if (mvaUnit === 'kVA') mva /= 1000;
+  let vp = safeNum(document.getElementById('tVp').value, 66); if (vpUnit === 'V') vp /= 1000;
+  let vs = safeNum(document.getElementById('tVs').value, 11); if (vsUnit === 'V') vs /= 1000;
+  const zpc = safeNum(document.getElementById('tZpc').value, 8);
+  const divisor = type === '1ph' ? 1 : Math.sqrt(3);
+  const flcPrimary = (mva*1e6)/(divisor*vp*1e3); const flcSecondary = (mva*1e6)/(divisor*vs*1e3);
+  const faultPrimary = flcPrimary/(zpc/100); const faultSecondary = flcSecondary/(zpc/100);
+  document.getElementById('tResults').innerHTML = `
+    <div class="result-line"><span>Transformer type</span><b>${type==='1ph'?'Single-Phase':'Three-Phase'}</b></div>
+    <div class="result-line"><span>Primary FLC</span><b>${flcPrimary.toFixed(1)} A</b></div>
+    <div class="result-line"><span>Secondary FLC</span><b>${flcSecondary.toFixed(1)} A</b></div>
+    <div class="result-line"><span>Primary fault current</span><b>${faultPrimary.toFixed(0)} A (${(faultPrimary/1000).toFixed(2)} kA)</b></div>
+    <div class="result-line"><span>Secondary fault current</span><b>${faultSecondary.toFixed(0)} A (${(faultSecondary/1000).toFixed(2)} kA)</b></div>
+  `;
 }
 
 // ===================== Loss of Field (40) Mho Setting Calculator =====================
@@ -321,71 +530,24 @@ function renderLossOfField(container){
       <p class="note" style="margin:0;">ZB = (V²/MVA) × (CT/PT). VNOM = V×1000/PT. INOM = (MVA×10<sup>6</sup>)/(√3×V×1000)/CT. Zone 1 diameter = ZB/(√3×Xd'), offset = &minus;Xd×ZB/2. Zone 2 diameter = Xd×ZB, offset = same as Zone 1. Both circles are centred on the negative reactance axis (offset mho into ‑jX), per standard generator loss-of-field protection practice. Verify against relay-specific setting conventions (e.g. SEL, GE) before commissioning.</p>
     </div>
   `;
-  ['lofV','lofMva','lofPT','lofCT','lofXd','lofXdp','lofZ1t','lofZ2t'].forEach(id => {
-    document.getElementById(id).addEventListener('input', calcLossOfField);
-  });
+  ['lofV','lofMva','lofPT','lofCT','lofXd','lofXdp','lofZ1t','lofZ2t'].forEach(id => { document.getElementById(id).addEventListener('input', calcLossOfField); });
   calcLossOfField();
 }
 function drawMhoCircles(zones){
-  const canvas = document.getElementById('lofCanvas');
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
+  const canvas = document.getElementById('lofCanvas'); if (!canvas) return; const ctx = canvas.getContext('2d');
   const datasets = zones.map(z => {
-    const points = [];
-    for (let a = 0; a <= 360; a += 2){
-      const rad = a * Math.PI/180;
-      const x = z.centerR + z.radius*Math.cos(rad);
-      const y = z.centerX + z.radius*Math.sin(rad);
-      points.push({x, y});
-    }
-    return {
-      label: z.label,
-      data: points,
-      borderColor: z.color,
-      backgroundColor: 'transparent',
-      borderWidth: 2,
-      pointRadius: 0,
-      showLine: true,
-      fill: false,
-      parsing: false,
-    };
+    const points = []; for (let a = 0; a <= 360; a += 2){ const rad = a * Math.PI/180; const x = z.centerR + z.radius*Math.cos(rad); const y = z.centerX + z.radius*Math.sin(rad); points.push({x, y}); }
+    return { label: z.label, data: points, borderColor: z.color, backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, showLine: true, fill: false, parsing: false };
   });
   if (lofChart) lofChart.destroy();
-  lofChart = new Chart(ctx, {
-    type: 'line',
-    data: { datasets },
-    options: {
-      responsive: true,
-      parsing: false,
-      aspectRatio: 1,
-      scales: {
-        x: { type:'linear', title:{display:true,text:'R (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} },
-        y: { type:'linear', title:{display:true,text:'X (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} },
-      },
-      plugins: { legend: { labels: { color: '#e7ecf7' } } }
-    }
-  });
+  lofChart = safeChart(ctx, { type: 'line', data: { datasets }, options: { responsive: true, parsing: false, aspectRatio: 1, scales: { x: { type:'linear', title:{display:true,text:'R (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} }, y: { type:'linear', title:{display:true,text:'X (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#2a3654'} } }, plugins: { legend: { labels: { color: '#e7ecf7' } } } } });
 }
 function calcLossOfField(){
-  const V = safeNum(document.getElementById('lofV').value, 20);
-  const MVA = safeNum(document.getElementById('lofMva').value, 492);
-  const PT = safeNum(document.getElementById('lofPT').value, 167);
-  const CT = safeNum(document.getElementById('lofCT').value, 3600);
-  const Xd = safeNum(document.getElementById('lofXd').value, 1.1888);
-  const Xdp = safeNum(document.getElementById('lofXdp').value, 0.20577);
-  const Z1t = safeNum(document.getElementById('lofZ1t').value, 0.1);
-  const Z2t = safeNum(document.getElementById('lofZ2t').value, 0.5);
-  const ZB = (V*V/MVA)*(CT/PT);
-  const VNOM = V*1000/PT;
-  const INOM = (MVA*1e6)/(Math.sqrt(3)*V*1000)/CT;
-  const Z1_diameter = ZB/(Math.sqrt(3)*Xdp);
-  const Z1_offset = -Xd*ZB/2;
-  const Z2_diameter = Xd*ZB;
-  const Z2_offset = Z1_offset;
-  const Z1_radius = Z1_diameter/2;
-  const Z2_radius = Z2_diameter/2;
-  const Z1_centerX = Z1_offset - Z1_radius;
-  const Z2_centerX = Z2_offset - Z2_radius;
+  const V = safeNum(document.getElementById('lofV').value, 20); const MVA = safeNum(document.getElementById('lofMva').value, 492); const PT = safeNum(document.getElementById('lofPT').value, 167); const CT = safeNum(document.getElementById('lofCT').value, 3600);
+  const Xd = safeNum(document.getElementById('lofXd').value, 1.1888); const Xdp = safeNum(document.getElementById('lofXdp').value, 0.20577); const Z1t = safeNum(document.getElementById('lofZ1t').value, 0.1); const Z2t = safeNum(document.getElementById('lofZ2t').value, 0.5);
+  const ZB = (V*V/MVA)*(CT/PT); const VNOM = V*1000/PT; const INOM = (MVA*1e6)/(Math.sqrt(3)*V*1000)/CT;
+  const Z1_diameter = ZB/(Math.sqrt(3)*Xdp); const Z1_offset = -Xd*ZB/2; const Z2_diameter = Xd*ZB; const Z2_offset = Z1_offset;
+  const Z1_radius = Z1_diameter/2; const Z2_radius = Z2_diameter/2; const Z1_centerX = Z1_offset - Z1_radius; const Z2_centerX = Z2_offset - Z2_radius;
   document.getElementById('lofResults').innerHTML = `
     <div class="result-line"><span>Base impedance ZB</span><b>${ZB.toFixed(3)} Ω</b></div>
     <div class="result-line"><span>VNOM (secondary)</span><b>${VNOM.toFixed(2)} V</b></div>
@@ -404,6 +566,26 @@ function calcLossOfField(){
 }
 
 // ===================== Distance Protection (Quad / Mho) Calculator =====================
+const DP_RELAY_PRESETS = {
+  generic: {
+    label: 'Generic (R-X Ohms)',
+    fieldLabels: {
+      r1: 'R1 reach, Ph-Ph (Ω)', x1: 'X1 reach, Ph-Ph (Ω)', r0: 'R0 reach, zero-seq (Ω)', x0: 'X0 reach, zero-seq (Ω)',
+      minRis: 'Min resistive reach (Ω)', maxRis: 'Max resistive reach (Ω)', rev: 'Reverse reach override (Ω, mho, 0=auto)',
+      maxAng: 'Right blinder angle (deg)', minAng: 'Left blinder angle (deg)', tilt: 'Tilt angle (deg)'
+    },
+    note: "Generic quadrilateral/mho R-X plane model using plain engineering terminology. Verify field mapping against your specific relay's setting/application manual before commissioning."
+  },
+  abb630: {
+    label: 'ABB Relion REx630',
+    fieldLabels: {
+      r1: 'R1 Zone, Ph-Ph (Ω)', x1: 'X1 Zone, Ph-Ph (Ω)', r0: 'R0 Zone, zero-seq (Ω)', x0: 'X0 Zone, zero-seq (Ω)',
+      minRis: 'Min Ris Reach (Ω)', maxRis: 'Max Ris Reach (Ω)', rev: 'Circle Radius override (Ω, mho, 0=auto)',
+      maxAng: 'Max Phase Angle (right blinder, deg)', minAng: 'Min Phase Angle (left blinder, deg)', tilt: 'Tilt angle (deg, +ve increases area)'
+    },
+    note: 'ABB REx630-style parameter names. Ph-E reach auto-derived via (2×Z1+Z0)/3, matching the relay setting-sheet formula. Verified against REx630 example data.'
+  }
+};
 let distChart = null;
 if (typeof Chart !== 'undefined' && !Chart._dpLabelPluginRegistered) {
   Chart.register({
@@ -429,25 +611,26 @@ if (typeof Chart !== 'undefined' && !Chart._dpLabelPluginRegistered) {
 }
 function renderDistProt(container){
   container.innerHTML = `
-    <h2>Distance Protection Zone Plotter <span class="std-badge">ABB Quadrilateral / Mho, R-X Plane</span></h2>
-    <p class="tool-desc">Plot a distance protection zone characteristic (quadrilateral or mho) on the R-X impedance plane from relay reach settings, based on ABB REx630-style parameters. Ph-E reach is derived automatically from Ph-Ph reach and zero-sequence impedance, matching the relay setting sheet formula (2&times;Z1+Z0)/3.</p>
+    <h2>Distance Protection Zone Plotter <span class="std-badge">Quadrilateral / Mho, R-X Plane</span></h2>
+    <p class="tool-desc">Plot a distance protection zone characteristic (quadrilateral or mho) on the R-X impedance plane. Choose a relay type below to switch parameter naming conventions — the underlying reach geometry is the same generic model either way. Ph-E reach is derived automatically from Ph-Ph reach and zero-sequence impedance: (2×Z1+Z0)/3.</p>
     <div class="grid">
       <div class="card">
+        <div class="field"><label>Relay type / convention</label><select id="dpRelayType">${Object.entries(DP_RELAY_PRESETS).map(([k,v]) => `<option value="${k}" ${k==='abb630'?'selected':''}>${v.label}</option>`).join('')}</select></div>
         <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin-bottom:8px;">Characteristic</label>
-        <div class="fault-type-grid"><button class="dp-type-btn active" data-type="quad">Quadrilateral</button><button class="dp-type-btn" data-type="mho">Mho (circular)</button></div>
+        <div class="fault-type-grid" data-savegroup="dpType"><button class="dp-type-btn active" data-value="quad">Quadrilateral</button><button class="dp-type-btn" data-value="mho">Mho (circular)</button></div>
         <label style="display:block;font-size:0.78rem;color:var(--text-dim);margin:12px 0 8px;">Loop</label>
-        <div class="fault-type-grid"><button class="dp-loop-btn active" data-loop="phph">Ph-Ph</button><button class="dp-loop-btn" data-loop="phe">Ph-E</button></div>
+        <div class="fault-type-grid" data-savegroup="dpLoop"><button class="dp-loop-btn active" data-value="phph">Ph-Ph</button><button class="dp-loop-btn" data-value="phe">Ph-E</button></div>
         <div class="compact-form" style="margin-top:12px;">
-          <div class="field"><label>R1 Zone, Ph-Ph (&Omega;)</label><input id="dpR1" type="number" value="12.86" step="0.01"></div>
-          <div class="field"><label>X1 Zone, Ph-Ph (&Omega;)</label><input id="dpX1" type="number" value="28.78" step="0.01"></div>
-          <div class="field"><label>R0 Zone, zero-seq (&Omega;)</label><input id="dpR0" type="number" value="5" step="0.01"></div>
-          <div class="field"><label>X0 Zone, zero-seq (&Omega;)</label><input id="dpX0" type="number" value="65.5" step="0.01"></div>
-          <div class="field" id="dpRisWrap"><label>Min Ris Reach (&Omega;)</label><input id="dpMinRis" type="number" value="7.77" step="0.01"></div>
-          <div class="field" id="dpMaxRisWrap"><label>Max Ris Reach (&Omega;)</label><input id="dpMaxRis" type="number" value="7.77" step="0.01"></div>
-          <div class="field" id="dpRevWrap" style="display:none;"><label>Circle Radius override (&Omega;, mho, 0=auto)</label><input id="dpRev" type="number" value="0" step="0.01"></div>
-          <div class="field"><label>Max Phase Angle (right blinder, deg)</label><input id="dpMaxAng" type="number" value="45" step="0.1" min="0" max="60"></div>
-          <div class="field"><label>Min Phase Angle (left blinder, deg)</label><input id="dpMinAng" type="number" value="115" step="0.1" min="90" max="150"></div>
-          <div class="field"><label>Tilt angle (deg, +ve increases area)</label><input id="dpTilt" type="number" value="0" step="0.1" min="-45" max="45"></div>
+          <div class="field"><label id="dpR1Label">R1 Zone, Ph-Ph (Ω)</label><input id="dpR1" type="number" value="12.86" step="0.01"></div>
+          <div class="field"><label id="dpX1Label">X1 Zone, Ph-Ph (Ω)</label><input id="dpX1" type="number" value="28.78" step="0.01"></div>
+          <div class="field"><label id="dpR0Label">R0 Zone, zero-seq (Ω)</label><input id="dpR0" type="number" value="5" step="0.01"></div>
+          <div class="field"><label id="dpX0Label">X0 Zone, zero-seq (Ω)</label><input id="dpX0" type="number" value="65.5" step="0.01"></div>
+          <div class="field" id="dpRisWrap"><label id="dpMinRisLabel">Min Ris Reach (Ω)</label><input id="dpMinRis" type="number" value="7.77" step="0.01"></div>
+          <div class="field" id="dpMaxRisWrap"><label id="dpMaxRisLabel">Max Ris Reach (Ω)</label><input id="dpMaxRis" type="number" value="7.77" step="0.01"></div>
+          <div class="field" id="dpRevWrap" style="display:none;"><label id="dpRevLabel">Circle Radius override (Ω, mho, 0=auto)</label><input id="dpRev" type="number" value="0" step="0.01"></div>
+          <div class="field"><label id="dpMaxAngLabel">Max Phase Angle (right blinder, deg)</label><input id="dpMaxAng" type="number" value="45" step="0.1" min="0" max="60"></div>
+          <div class="field"><label id="dpMinAngLabel">Min Phase Angle (left blinder, deg)</label><input id="dpMinAng" type="number" value="115" step="0.1" min="90" max="150"></div>
+          <div class="field"><label id="dpTiltLabel">Tilt angle (deg, +ve increases area)</label><input id="dpTilt" type="number" value="0" step="0.1" min="-45" max="45"></div>
         </div>
         <div class="checkrow"><input type="checkbox" id="dpShowBlinders" checked><label for="dpShowBlinders" style="margin:0;">Show directional load blinders</label></div>
         <div class="checkrow"><input type="checkbox" id="dpShowLabels" checked><label for="dpShowLabels" style="margin:0;">Show vertex coordinates</label></div>
@@ -455,17 +638,28 @@ function renderDistProt(container){
       </div>
       <div class="chart-wrap"><canvas id="dpCanvas"></canvas></div>
     </div>
-    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">Ph-E reach: R1_PhE = (2&times;R1_PhPh + R0)/3, X1_PhE = (2&times;X1_PhPh + X0)/3. Quadrilateral vertices: origin &rarr; (MinRisReach, &minus;MinRisReach&middot;tan(MaxAngle)) &rarr; (MinRisReach, 0) &rarr; (MaxRisReach+R1, X1) &rarr; (X1/tan(MinAngle), X1) &rarr; origin, rotated by the tilt angle. Mho: circle with diameter between forward reach R1&ang;(atan2(X1,R1)) and the reverse point (0 = self-polarised), or overridden directly by Circle Radius. Simplified for visualisation only &mdash; verify against the relay's technical/application manual before commissioning.</p></div>
+    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;" id="dpPresetNote"></p></div>
+    <div class="card" style="margin-top:16px;"><p class="note" style="margin:0;">Ph-E reach: R1_PhE = (2×R1_PhPh + R0)/3, X1_PhE = (2×X1_PhPh + X0)/3. Quadrilateral vertices: origin → (MinRisReach, −MinRisReach·tan(MaxAngle)) → (MinRisReach, 0) → (MaxRisReach+R1, X1) → (X1/tan(MinAngle), X1) → origin, rotated by the tilt angle. Mho: circle with diameter between forward reach R1∠(atan2(X1,R1)) and the reverse point (0 = self-polarised), or overridden directly by the reverse reach field. Simplified for visualisation only — verify against the relay's technical/application manual before commissioning.</p></div>
   `;
-  document.querySelectorAll('.dp-type-btn').forEach(btn => { btn.onclick = () => { document.querySelectorAll('.dp-type-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); const isQuad = btn.dataset.type==='quad'; document.getElementById('dpRisWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpMaxRisWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpRevWrap').style.display = isQuad ? 'none' : ''; calcDistProt(); }; });
-  document.querySelectorAll('.dp-loop-btn').forEach(btn => { btn.onclick = () => { document.querySelectorAll('.dp-loop-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); calcDistProt(); }; });
+  container.querySelectorAll('.dp-type-btn').forEach(btn => { btn.onclick = () => { container.querySelectorAll('.dp-type-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); const isQuad = btn.dataset.value==='quad'; document.getElementById('dpRisWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpMaxRisWrap').style.display = isQuad ? '' : 'none'; document.getElementById('dpRevWrap').style.display = isQuad ? 'none' : ''; calcDistProt(); }; });
+  container.querySelectorAll('.dp-loop-btn').forEach(btn => { btn.onclick = () => { container.querySelectorAll('.dp-loop-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); calcDistProt(); }; });
+  document.getElementById('dpRelayType').addEventListener('change', () => { applyDpPreset(); calcDistProt(); });
   ['dpR1','dpX1','dpR0','dpX0','dpMinRis','dpMaxRis','dpRev','dpMaxAng','dpMinAng','dpTilt','dpShowBlinders','dpShowLabels'].forEach(id => { document.getElementById(id).addEventListener('input', calcDistProt); document.getElementById(id).addEventListener('change', calcDistProt); });
+  applyDpPreset();
   calcDistProt();
+}
+function applyDpPreset(){
+  const key = document.getElementById('dpRelayType').value;
+  const preset = DP_RELAY_PRESETS[key] || DP_RELAY_PRESETS.generic;
+  const map = { dpR1Label:'r1', dpX1Label:'x1', dpR0Label:'r0', dpX0Label:'x0', dpMinRisLabel:'minRis', dpMaxRisLabel:'maxRis', dpRevLabel:'rev', dpMaxAngLabel:'maxAng', dpMinAngLabel:'minAng', dpTiltLabel:'tilt' };
+  Object.entries(map).forEach(([elId,fk]) => { const el = document.getElementById(elId); if (el) el.textContent = preset.fieldLabels[fk]; });
+  const noteEl = document.getElementById('dpPresetNote'); if (noteEl) noteEl.textContent = preset.note;
 }
 function dpRotate(pt, tiltRad){ return { x: pt.x*Math.cos(tiltRad) - pt.y*Math.sin(tiltRad), y: pt.x*Math.sin(tiltRad) + pt.y*Math.cos(tiltRad) }; }
 function calcDistProt(){
-  const type = document.querySelector('.dp-type-btn.active').dataset.type;
-  const loop = document.querySelector('.dp-loop-btn.active').dataset.loop;
+  const panel = document.getElementById('panel-distprot');
+  const type = panel.querySelector('.dp-type-btn.active').dataset.value;
+  const loop = panel.querySelector('.dp-loop-btn.active').dataset.value;
   const R1pp = safeNum(document.getElementById('dpR1').value, 12.86);
   const X1pp = safeNum(document.getElementById('dpX1').value, 28.78);
   const R0 = safeNum(document.getElementById('dpR0').value, 5);
@@ -539,10 +733,11 @@ function calcDistProt(){
 
   const ctx = document.getElementById('dpCanvas');
   if (distChart) distChart.destroy();
-  distChart = new Chart(ctx, { type:'line', data:{datasets}, options:{ responsive:true, parsing:false, aspectRatio:1.1, scales:{ x:{type:'linear', min:minX, max:maxX, title:{display:true,text:'R (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#1c2740'}}, y:{type:'linear', min:minY, max:maxY, title:{display:true,text:'X (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#1c2740'}} }, plugins:{legend:{labels:{color:'#e7ecf7', font:{size:10}, filter: (item) => !['R axis','X axis','Origin','Mho key points'].includes(item.text)}}} } });
+  distChart = safeChart(ctx, { type:'line', data:{datasets}, options:{ responsive:true, parsing:false, aspectRatio:1.1, scales:{ x:{type:'linear', min:minX, max:maxX, title:{display:true,text:'R (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#1c2740'}}, y:{type:'linear', min:minY, max:maxY, title:{display:true,text:'X (Ω secondary)',color:'#9fb0cf'}, ticks:{color:'#9fb0cf'}, grid:{color:'#1c2740'}} }, plugins:{legend:{labels:{color:'#e7ecf7', font:{size:10}, filter: (item) => !['R axis','X axis','Origin','Mho key points'].includes(item.text)}}} } });
   document.getElementById('dpResults').innerHTML = resultsHtml;
 }
 
+// ===================== Arc Flash & Standards Library =====================
 function renderArcFlash(container){
   container.innerHTML = `
     <h2>Arc Flash Quick Reference <span class="std-badge">AS/NZS 4836 · IEC 61482 · IEC/TR 60909</span></h2>
@@ -571,6 +766,8 @@ function renderReferences(container){
   const tabBtns = container.querySelectorAll('.ref-tab-btn'); const panels = container.querySelectorAll('.ref-panel');
   tabBtns.forEach(btn => { btn.addEventListener('click', () => { tabBtns.forEach(b => b.classList.remove('active')); panels.forEach(p => p.classList.remove('active')); btn.classList.add('active'); const idx = btn.dataset.idx; container.querySelector(`.ref-panel[data-idx="${idx}"]`).classList.add('active'); }); });
 }
+
+// ===================== App shell =====================
 function initApp(){
   const sideNav = document.getElementById('sideNav'); const app = document.getElementById('app'); const topbarTitle = document.getElementById('topbarTitle');
   sideNav.innerHTML = TOOL_GROUPS.map(g => `<div class="side-group"><div class="side-group-label">${g.label}</div>${g.tools.map(t => `<button type="button" class="side-link" data-tool="${t.id}">${t.label}</button>`).join('')}</div>`).join('');
@@ -579,7 +776,8 @@ function initApp(){
   function activate(id){
     document.querySelectorAll('.side-link').forEach(b => b.classList.toggle('active', b.dataset.tool===id));
     document.querySelectorAll('.tool-panel').forEach(p => p.classList.toggle('active', p.id===`panel-${id}`));
-    const panel = document.getElementById(`panel-${id}`); if (!panel.dataset.rendered){ renderers[id](panel); panel.dataset.rendered = '1'; }
+    const panel = document.getElementById(`panel-${id}`);
+    if (!panel.dataset.rendered){ renderers[id](panel); attachSaveLoadUI(panel, id); panel.dataset.rendered = '1'; }
     const toolMeta = TOOLS.find(t => t.id === id); if (toolMeta) topbarTitle.textContent = toolMeta.label;
     if (window.innerWidth <= 850){ document.getElementById('sidebar').classList.remove('mobile-open'); }
   }
