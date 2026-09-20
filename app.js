@@ -1,4 +1,4 @@
-// ===================== Protection Engineering Toolkit v0.9.2 =====================
+// ===================== Protection Engineering Toolkit v0.9.3 =====================
 const TOOL_GROUPS = [
   { label: 'Overcurrent', tools: [ {id:'tcc', label:'TCC Plotter'} ] },
   { label: 'System Analysis', tools: [ {id:'symcomp', label:'Symmetrical Components'}, {id:'fault', label:'Fault Level Calculator'} ] },
@@ -909,7 +909,7 @@ function renderDiffPickup787(container){
   calcDiffPickup787();
   renderFormulaBlock(container, 'Reference formulas', [
     String.raw`I = \dfrac{\text{MVA}\times10^6}{\sqrt3\,V}, \quad \text{Ph-Ph pickup} = \dfrac{O87P\cdot I}{\text{CT ratio}}`,
-    String.raw`\text{HV Ph-E} = \text{HV Ph-Ph (unchanged)}, \quad \text{LV Ph-E} = \text{LV Ph-Ph}\times\text{mult(W2CTC)}`
+    String.raw`\text{Ph-E (pure 1}\phi\text{-G)} = \text{Ph-Ph}\times\text{mult(CTC)}`
   ]);
 }
 function calcDiffPickup787(){
@@ -925,21 +925,25 @@ function calcDiffPickup787(){
   if (isNaN(f1)) warnHtml += `<div class="result-flag flag-warn">⚠ W1CTC = ${w1ctc} has no 1-phase-to-earth multiplier in the lookup table.</div>`;
   if (isNaN(f2)) warnHtml += `<div class="result-flag flag-warn">⚠ W2CTC = ${w2ctc} has no 1-phase-to-earth multiplier in the lookup table.</div>`;
   const hvLL = o87p*ip/ctrHv; const lvLL = o87p*is/ctrLv;
-  // HV Ph-E pickup is NOT multiplied by the W1CTC factor — confirmed against four independent
-  // OMICRON ramp tests on a real SEL-787 (Dy11, 15 MVA, wye CTs both sides): HV single-phase-to-ground
-  // tripped at essentially the same current as the HV balanced test (no L-E correction on HV). Only
-  // the LV side's earth-fault sensitivity actually changes, matching PU L-L x W2CTC factor exactly.
-  const hvLE = hvLL; const lvLE = lvLL*f2;
+  // Ph-E pickup = Ph-Ph pickup x CTC factor on BOTH sides, for a pure single-phase-to-ground
+  // injection (IB = IC = 0). Derived from the actual CTC matrix equations and cross-checked
+  // against real spreadsheet cells for an independent transformer: HV CTC(12) gives
+  // Icomp = (2*IA - IB - IC)/3, so IA = 1.5 x base at IB=IC=0; LV CTC(11) gives
+  // Icomp = (IA - IC)/sqrt(3) (IB does not appear), so IA = sqrt(3) x base at IC=0.
+  // A field test that trips at a LOWER current than this (e.g. ~PU L-L on HV) is not a pure
+  // single-phase test — it means a return current was also flowing in the other two phases,
+  // which is exactly the separate "-100 mA offset" scenario computed in the Injection section below.
+  const hvLE = hvLL*f1; const lvLE = lvLL*f2;
   const hvLLmA = hvLL*1000, lvLLmA = lvLL*1000;
   const deltaIa = hvLLmA*f1 + (dIb+dIc)/2; const starIa = lvLLmA*f2 + sIc;
-  if (!(w1ctc===12 && w2ctc===11)) warnHtml += `<div class="result-flag flag-warn">⚠ The injection formulas were derived in the original sheet for W1CTC=12 and W2CTC=11. Verify before using other settings.</div>`;
+  if (!(w1ctc===12 && w2ctc===11)) warnHtml += `<div class="result-flag flag-warn">⚠ The Ph-E and injection formulas are derived from the specific W1CTC=12 / W2CTC=11 matrix equations. Verify the matrix structure before trusting other CTC codes.</div>`;
   document.getElementById('dp7Results').innerHTML = `
     <div class="result-line"><span>HV winding rated current (Ip)</span><b>${ip.toFixed(2)} A</b></div>
     <div class="result-line"><span>LV winding rated current (Is)</span><b>${is.toFixed(2)} A</b></div>
-    <div class="result-line"><span>W1CTC factor (informational — not applied to HV Ph-E)</span><b>${isNaN(f1)?'—':f1.toFixed(4)}</b></div>
-    <div class="result-line"><span>W2CTC factor (applied to LV Ph-E)</span><b>${isNaN(f2)?'—':f2.toFixed(4)}</b></div>
+    <div class="result-line"><span>Ph-E multiplier, W1CTC</span><b>${isNaN(f1)?'—':f1.toFixed(4)}</b></div>
+    <div class="result-line"><span>Ph-E multiplier, W2CTC</span><b>${isNaN(f2)?'—':f2.toFixed(4)}</b></div>
     ${warnHtml}
-    <div class="note">HV Ph-E pickup equals the plain HV Ph-Ph pickup — confirmed against four independent OMICRON ramp tests on a real SEL-787 (15 MVA Dy11, wye-connected CTs both sides, LV star point grounded): HV single-phase-to-ground tripped at essentially the same current as the HV balanced test, while LV single-phase-to-ground tripped at the W2CTC-corrected value. The W1CTC factor is shown for reference only.</div>
+    <div class="note">Ph-E pickup values below are for a <b>pure</b> single-phase-to-ground injection (other two phases at zero) — the more realistic representation of an actual earth fault. The separate Injection section further down instead computes the Phase A current needed to trip when the other two phases carry a fixed −100 mA return current, a common bench-test convention that trips at a different (typically lower) current than the pure single-phase case.</div>
   `;
   function sideTable(title, ll, le, llTol, leTol){
     return `<thead><tr><th colspan="5">${title}</th></tr><tr><th></th><th>Pickup (A)</th><th>Pickup (mA)</th><th>-5% (mA)</th><th>+5% (mA)</th></tr></thead><tbody>

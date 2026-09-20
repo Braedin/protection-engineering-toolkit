@@ -2,6 +2,11 @@
 
 All notable changes to the Protection Engineering Toolkit are documented here.
 
+## [0.9.3] - 2026-09-20
+
+### Fixed
+- **SEL-787 Differential Pickup: reverted the previous "HV gets no Ph-E correction" change — it was based on a misread field test.** A more rigorous derivation of the actual CTC matrix equations (HV CTC(12): Icomp=(2·IA−IB−IC)/3; LV CTC(11): Icomp=(IA−IC)/√3, IB not involved), cross-checked against real spreadsheet cells for an independent 2.5 MVA transformer, confirms Ph-E pickup **is** Ph-Ph pickup × the CTC factor on **both** sides for a pure single-phase-to-ground injection (other two phases at zero). The field test that appeared to show "no HV correction" wasn't actually a pure single-phase test — the other two phases were also being ramped in opposition, which is a different (and separately already-modelled) test convention: the tool's "Injection" section below the pickup tables. Verified: HV Ph-E = 354.3 mA, LV Ph-E = 434.8 mA (both back to matching the original formula), while the Injection section's −100 mA-offset values (254.3 mA / 334.8 mA) are unchanged and were already correct.
+
 ## [0.9.2] - 2026-09-20
 
 ### Fixed
