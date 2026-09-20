@@ -2,6 +2,15 @@
 
 All notable changes to the Protection Engineering Toolkit are documented here.
 
+## [0.9.4] - 2026-09-20
+
+### Fixed
+- **SEL-787 Differential Pickup: replaced the simplified per-code scalar multiplier with the actual SEL-787 WnCTC compensation matrices** (row 1 / Phase-A element) from the instruction manual's "Complete List of Compensation Matrices (m = 1 to 12)", covering every code 0–12 individually rather than grouping them by odd/even into three approximate multipliers. Two codes (3 and 9) have a zero coefficient on IA — the Phase-A element doesn't respond to a Phase-A-only injection at all for those codes — the tool now shows "N/A" with an explanatory warning instead of a wrong number.
+- Verified against every previously-confirmed real relay data point (HV Ph-E = 354.3 mA, LV Ph-E = 434.8 mA, HV injection = 254.3 mA, LV injection = 334.8 mA for the tool's default W1CTC=12/W2CTC=11 case), plus the identity matrix (WnCTC=0, Ph-E now correctly equals Ph-Ph) and the zero-coefficient codes (3, 9).
+
+### Changed
+- Return-current inputs for the injection test (previously "Ib/Ic at 180°", entered as negative numbers) are now entered as a positive magnitude and applied at 180° (negated) automatically, per the SEL test convention. Added an LV-side Ib input (previously only Ic was exposed), since other CTC codes besides the default W2CTC=11 do involve Ib.
+
 ## [0.9.3] - 2026-09-20
 
 ### Fixed
